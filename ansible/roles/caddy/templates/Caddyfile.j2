@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+
+{{ forgejo_domain }} {
+{% if caddy_tls_mode == 'internal' %}
+	# Caddy's own local CA. No public DNS or reachable port 80 required, which
+	# is what makes this work on a LAN-only name. Clients must trust the root
+	# once — see the README.
+	tls internal
+{% else %}
+	tls {{ caddy_acme_email }}
+{% endif %}
+
+	# Git pushes and LFS objects are large; the default 10 MB cap would reject
+	# anything but toy repositories.
+	request_body {
+		max_size 2GB
+	}
+
+	reverse_proxy 127.0.0.1:{{ forgejo_http_port }}
+
+	encode gzip
+
+	# Deliberately not named after the domain. `caddy validate` opens the log
+	# file, and Ansible runs that as root, so a per-domain path would leave a
+	# fresh root-owned file that the caddy user cannot write every time the
+	# domain changes. One stable path can be pre-created with the right owner.
+	log {
+		output file /var/log/caddy/access.log
+	}
+}

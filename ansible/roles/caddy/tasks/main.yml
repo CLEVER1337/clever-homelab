@@ -1,0 +1,67 @@
+---
+# Caddy is the only process on the VM listening on the LAN-facing ports. It
+# terminates TLS and proxies to Forgejo on loopback.
+
+- name: Ensure the keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install Caddy's signing key
+  ansible.builtin.get_url:
+    url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+    dest: /etc/apt/keyrings/caddy-stable.asc
+    mode: "0644"
+
+- name: Install the deb822 helper
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Add the Caddy repository
+  ansible.builtin.deb822_repository:
+    name: caddy-stable
+    types: [deb]
+    uris: https://dl.cloudsmith.io/public/caddy/stable/deb/debian
+    suites: any-version
+    components: [main]
+    signed_by: /etc/apt/keyrings/caddy-stable.asc
+    state: present
+
+- name: Install Caddy
+  ansible.builtin.apt:
+    name: caddy
+    state: present
+    update_cache: true
+
+# Must exist, owned by caddy, before the Caddyfile is validated below: the
+# validator runs as root and would otherwise create it root-owned and 0600,
+# leaving the service unable to open its own log.
+- name: Ensure the access log is writable by caddy
+  ansible.builtin.file:
+    path: /var/log/caddy/access.log
+    state: touch
+    owner: caddy
+    group: caddy
+    mode: "0640"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Write the Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: /etc/caddy/Caddyfile
+    owner: root
+    group: caddy
+    mode: "0640"
+    validate: caddy validate --adapter caddyfile --config %s
+  notify: Reload caddy
+
+- name: Enable Caddy
+  ansible.builtin.systemd:
+    name: caddy
+    enabled: true
+    state: started
