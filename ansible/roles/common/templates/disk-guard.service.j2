@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Check the root filesystem has room left
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/homelab-disk-guard

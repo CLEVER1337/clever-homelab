@@ -1,0 +1,21 @@
+---
+timezone: Europe/Moscow
+
+# Packages every machine gets, bare metal and guests alike.
+common_packages:
+  - curl
+  - git
+  - htop
+  - rsync
+  - vim
+  - ca-certificates
+
+# sshd hardening applied everywhere. Password auth off is the point of it;
+# make sure your key works before the first run finishes.
+ssh_permit_root_login: "no"
+ssh_password_authentication: "no"
+
+# Root filesystem usage at which the daily guard marks its unit failed.
+# The hypervisor only has a 79 GB root and guest disks are thin, so their
+# ceilings sum to more than exists — 80% leaves room to react.
+disk_guard_percent: 80

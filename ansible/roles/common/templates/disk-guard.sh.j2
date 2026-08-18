@@ -1,0 +1,27 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# Exits non-zero when the root filesystem crosses the threshold, which puts the
+# systemd unit into `failed`. That is the point: on a headless box with no mail
+# and no monitoring stack, a red unit in `systemctl --failed` is the cheapest
+# signal that actually gets noticed.
+#
+# This matters most on the hypervisor. Guest disks are thin, so their declared
+# ceilings can add up to far more than the host physically has — and a guest
+# filling up fills the host's root along with it, which takes down sshd,
+# journald and libvirt at once.
+
+set -u
+
+THRESHOLD={{ disk_guard_percent }}
+
+usage=$(df --output=pcent / | tail -1 | tr -dc '0-9')
+avail=$(df -h --output=avail / | tail -1 | tr -d ' ')
+size=$(df -h --output=size / | tail -1 | tr -d ' ')
+
+if [ "$usage" -ge "$THRESHOLD" ]; then
+    echo "root filesystem at ${usage}% of ${size} — only ${avail} free (threshold ${THRESHOLD}%)" >&2
+    exit 1
+fi
+
+echo "root filesystem at ${usage}% of ${size}, ${avail} free"

@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Daily root filesystem capacity check
+
+[Timer]
+OnCalendar=daily
+# Runs on next boot if the machine was off when it was due.
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
