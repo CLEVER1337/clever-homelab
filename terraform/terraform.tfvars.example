@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+hypervisor_host = "192.168.0.19" # <-- your Debian box
+hypervisor_user = "supervisor"   # <-- bootstrap.yml puts this user in the `libvirt` group
+
+ssh_private_key_path = "~/.ssh/id_ed25519"
+ssh_public_key       = "ssh-ed25519 AAAA... you@laptop" # contents of ~/.ssh/id_ed25519.pub
+
+# Must match `ansible_user` in ansible/inventory/hosts.yml.
+admin_user = "supervisor"
+
+# Defaults below are fine to leave alone. Uncomment to resize the Forgejo VM
+# or to add a second machine later.
+#
+# vms = {
+#   forgejo = {
+#     ip        = "10.42.0.10"
+#     vcpu      = 2
+#     memory_mb = 4096
+#     disk_gb   = 60
+#   }
+# }

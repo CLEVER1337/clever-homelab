@@ -1,0 +1,16 @@
+version: 2
+ethernets:
+  primary:
+    # The virtio NIC shows up as ens3/enp1s0 depending on machine type, so match
+    # on the prefix rather than hardcoding a name that may shift under us.
+    match:
+      name: "en*"
+    dhcp4: false
+    addresses:
+      - ${ip}/${prefix}
+    routes:
+      - to: default
+        via: ${gateway}
+    nameservers:
+      search: [${search_domain}]
+      addresses: [${join(", ", dns)}]

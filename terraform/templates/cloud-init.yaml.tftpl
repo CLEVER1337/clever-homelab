@@ -1,0 +1,27 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${hostname}.${search_domain}
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: true
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+# Key-only access from the moment the machine first boots.
+disable_root: true
+ssh_pwauth: false
+
+package_update: true
+packages:
+  - qemu-guest-agent
+  - python3
+
+runcmd:
+  # Lets the host do a clean `virsh shutdown` instead of pulling the power.
+  - [systemctl, enable, --now, qemu-guest-agent]
