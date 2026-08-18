@@ -1,0 +1,22 @@
+# Terraform
+.terraform/
+# .terraform.lock.hcl is deliberately NOT ignored — commit it so provider
+# versions are reproducible.
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+crash.log
+
+# Ansible
+*.retry
+ansible/collections/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Guest host keys, trusted on first use and reset on rebuild
+ansible/inventory/.known_hosts_guests
