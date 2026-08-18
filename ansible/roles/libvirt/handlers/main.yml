@@ -1,0 +1,32 @@
+---
+- name: Reload apparmor
+  # Per-domain profiles are regenerated at guest start, so they pick the new
+  # rule up on their own; this reloads the profiles already in the kernel.
+  ansible.builtin.systemd:
+    name: apparmor
+    state: reloaded
+
+- name: Restart libvirtd
+  ansible.builtin.systemd:
+    name: libvirtd
+    state: restarted
+
+- name: Reapply libvirt network
+  # Cycling the network makes libvirt rebuild its firewall rules and re-invoke
+  # the hook. Guests lose connectivity for the second or two this takes.
+  ansible.builtin.shell:
+    cmd: |
+      set -e
+      # On the very first run the hook is installed before the network exists.
+      if virsh net-info {{ libvirt_net_name }} >/dev/null 2>&1; then
+        virsh net-destroy {{ libvirt_net_name }} || true
+        virsh net-start {{ libvirt_net_name }}
+      fi
+  changed_when: true
+
+- name: Warn about group membership
+  ansible.builtin.debug:
+    msg: >-
+      {{ ansible_user }} was added to the `libvirt` group. Group membership is
+      only picked up by new sessions — close this SSH connection before running
+      `terraform apply`, or the provider will get permission denied.

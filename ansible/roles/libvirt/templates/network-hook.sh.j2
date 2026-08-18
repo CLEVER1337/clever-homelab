@@ -1,0 +1,76 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# libvirt network hook: publishes guest services on the host's LAN address.
+#
+# Why a hook and not a standalone nftables file: libvirt on Debian 12 drives the
+# firewall through iptables, and for a NAT network it installs a REJECT in
+# FORWARD for inbound-new traffic to the guests. A rule in a separate nftables
+# table cannot override that — in netfilter a reject verdict in any base chain
+# is terminal, so an accept elsewhere loses. The rules therefore have to go into
+# the same chain, above libvirt's own. This hook is invoked by libvirt right
+# after it has installed those rules, so inserting at position 1 puts us first.
+#
+# It also re-runs on every network start, including at boot, which is what keeps
+# the rules alive across libvirt restarts that flush and rebuild everything.
+#
+# Invocation: $1 = network name, $2 = operation.
+
+set -u
+
+NETWORK="{{ libvirt_net_name }}"
+
+[ "${1:-}" = "$NETWORK" ] || exit 0
+
+# Resolved at run time rather than baked in by Ansible: the host holds a DHCP
+# lease, so a templated address would silently go stale after a lease change.
+lan_dev=$(ip route show default | awk '{print $5; exit}')
+HOST_IP=$(ip -4 -o addr show dev "$lan_dev" scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
+
+[ -n "$HOST_IP" ] || { echo "libvirt hook: no LAN address on $lan_dev" >&2; exit 1; }
+
+# Deletes are best-effort: removing a rule that is not there is not an error
+# worth aborting on.
+nat_rule() { # <flag> <chain> <host_port> <dest_ip> <dest_port>
+  iptables -t nat "$1" "$2" -d "$HOST_IP" -p tcp --dport "$3" \
+    -j DNAT --to-destination "$4:$5" 2>/dev/null || true
+}
+
+fwd_rule() { # <flag> <dest_ip> <dest_port>
+  iptables "$1" FORWARD -d "$2" -p tcp --dport "$3" \
+    -m conntrack --ctstate NEW,ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+}
+
+# PREROUTING covers traffic arriving from the LAN; OUTPUT covers connections the
+# host opens to its own address, which skip prerouting entirely.
+add_all() {
+{% for f in libvirt_nat_forwards %}
+  # {{ f.name }}
+  nat_rule -I PREROUTING {{ f.host_port }} {{ f.dest_ip }} {{ f.dest_port }}
+  nat_rule -I OUTPUT {{ f.host_port }} {{ f.dest_ip }} {{ f.dest_port }}
+  fwd_rule -I {{ f.dest_ip }} {{ f.dest_port }}
+{% endfor %}
+  :
+}
+
+del_all() {
+{% for f in libvirt_nat_forwards %}
+  nat_rule -D PREROUTING {{ f.host_port }} {{ f.dest_ip }} {{ f.dest_port }}
+  nat_rule -D OUTPUT {{ f.host_port }} {{ f.dest_ip }} {{ f.dest_port }}
+  fwd_rule -D {{ f.dest_ip }} {{ f.dest_port }}
+{% endfor %}
+  :
+}
+
+case "${2:-}" in
+  started)
+    # Drop first, so running the hook twice cannot stack duplicate rules.
+    del_all
+    add_all
+    ;;
+  stopped)
+    del_all
+    ;;
+esac
+
+exit 0

@@ -1,0 +1,27 @@
+---
+# On Debian, AppArmor is libvirt's security driver, and virt-aa-helper builds a
+# profile per domain from that domain's XML. Two things it cannot see:
+#
+#   - a qcow2's backing file, referenced from inside the image, never in the XML
+#   - disks written as <disk type='volume'>, which name a pool and volume rather
+#     than a path; the helper does not resolve those to a path
+#
+# This provider emits guest disks in exactly that second form, so neither the
+# shared base image nor the guest's own disk gets a rule, and qemu is denied.
+# The stock /var/lib/libvirt/images escapes it only by being allowed wholesale
+# in the shipped abstraction; any other pool path does not.
+
+- name: Check whether AppArmor confines libvirt here
+  ansible.builtin.stat:
+    path: /etc/apparmor.d/local/abstractions
+  register: libvirt_apparmor_local
+
+- name: Let qemu read backing images in the pool
+  ansible.builtin.template:
+    src: apparmor-libvirt-qemu.j2
+    dest: /etc/apparmor.d/local/abstractions/libvirt-qemu
+    owner: root
+    group: root
+    mode: "0644"
+  when: libvirt_apparmor_local.stat.exists
+  notify: Reload apparmor

@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# Included from the tail of abstractions/libvirt-qemu, the supported hook for
+# site-local additions.
+#
+# Write access is required, not just read. virt-aa-helper builds each domain's
+# profile from its XML and can only whitelist paths it can resolve — but this
+# provider emits guest disks as <disk type='volume'> naming a pool and volume,
+# not a path, and the helper does not resolve those. So no per-guest rule is
+# generated for them at all, and the disk is denied on open-for-write.
+#
+# The trade-off is real: this grants every confined qemu process access to the
+# whole pool, so AppArmor no longer isolates one guest's disk from another's.
+# The alternative is worse — <disk type='file'> would resolve, but this
+# provider hardcodes the driver to raw for any path it is given, and would
+# hand qemu a qcow2 to interpret as a raw device (see disk_def.go:22 and
+# domain.go:620 in v0.8.3). Silent corruption beats a clean permission error.
+{{ libvirt_pool_path }}/** rwk,

@@ -1,0 +1,22 @@
+---
+# Inbound port forwarding into the NAT network. See the hook script itself for
+# why this is a libvirt hook rather than a standalone firewall ruleset.
+
+- name: Create the libvirt hooks directory
+  ansible.builtin.file:
+    path: /etc/libvirt/hooks
+    state: directory
+    mode: "0755"
+
+- name: Install the network hook
+  ansible.builtin.template:
+    src: network-hook.sh.j2
+    dest: /etc/libvirt/hooks/network
+    mode: "0755"
+    validate: bash -n %s
+  notify:
+    # libvirtd only looks for hook scripts when it starts, so a freshly created
+    # hook is invisible until the daemon is restarted. The network then has to
+    # be cycled for the hook to actually fire and lay down the rules.
+    - Restart libvirtd
+    - Reapply libvirt network

@@ -1,0 +1,29 @@
+---
+# --- libvirt storage ----------------------------------------------------------
+libvirt_pool_name: homelab
+libvirt_pool_path: /var/lib/libvirt/homelab
+
+# --- libvirt network ----------------------------------------------------------
+# NAT, no DHCP: guests get fixed addresses from cloud-init instead, which keeps
+# the Ansible inventory honest without a lease server to argue with.
+# These MUST match the network_* variables in terraform/variables.tf.
+libvirt_net_name: homelab
+libvirt_net_bridge: virbr-homelab
+libvirt_net_gateway: 10.42.0.1
+libvirt_net_netmask: 255.255.255.0
+libvirt_net_cidr: 10.42.0.0/24
+
+# --- inbound port forwarding --------------------------------------------------
+# libvirt NAT gives guests outbound access but nothing inbound. These entries
+# become DNAT rules publishing selected guest ports on the host's LAN address,
+# installed by /etc/libvirt/hooks/network.
+#
+# The host address is resolved by the hook at run time, not templated here —
+# the box holds a DHCP lease and a baked-in address would go stale.
+#
+# Set `libvirt_nat_forwards: []` if you switch to a bridged network later —
+# with a bridge the guests are on the LAN directly and none of this is needed.
+libvirt_nat_forwards:
+  - { name: forgejo-http, host_port: 80, dest_ip: 10.42.0.10, dest_port: 80 }
+  - { name: forgejo-https, host_port: 443, dest_ip: 10.42.0.10, dest_port: 443 }
+  - { name: forgejo-ssh, host_port: 2222, dest_ip: 10.42.0.10, dest_port: 2222 }

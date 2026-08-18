@@ -1,0 +1,91 @@
+---
+# Ansible gathers no CPU-flags fact — `ansible_processor` is just model strings —
+# so this reads /proc/cpuinfo directly.
+- name: Look for virtualisation CPU flags
+  ansible.builtin.command: grep -cE '^flags[[:space:]]*:.*[[:space:]](vmx|svm)[[:space:]]' /proc/cpuinfo
+  register: virt_flag_count
+  changed_when: false
+  failed_when: false # grep -c exits 1 on zero matches; the assert below reports it
+  check_mode: false
+
+- name: Verify the CPU supports hardware virtualisation
+  ansible.builtin.assert:
+    that:
+      - virt_flag_count.stdout | default(0) | int > 0
+    fail_msg: >-
+      No vmx/svm CPU flag. Virtualisation is disabled in the BIOS/UEFI, or this
+      is already a VM. Enable VT-x / AMD-V and re-run.
+    success_msg: "Hardware virtualisation available on {{ virt_flag_count.stdout }} threads."
+
+- name: Install KVM and libvirt
+  ansible.builtin.apt:
+    name:
+      - qemu-system-x86
+      - qemu-utils
+      - libvirt-daemon-system
+      - libvirt-clients
+      - virtinst
+      - dnsmasq-base
+      # libvirt on Debian 12 manages its network rules through iptables, and
+      # the port-forwarding hook has to use the same tool to land in the same
+      # chains. Not nftables — see roles/libvirt/templates/network-hook.sh.j2.
+      - iptables
+      - python3-libvirt # required by the community.libvirt modules below
+      - python3-lxml
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable libvirtd
+  ansible.builtin.systemd:
+    name: libvirtd
+    enabled: true
+    state: started
+
+# Without this the qemu+ssh:// connection from Terraform would need root.
+- name: Allow the admin user to drive libvirt
+  ansible.builtin.user:
+    name: "{{ ansible_user }}"
+    groups: libvirt
+    append: true
+  notify: Warn about group membership
+
+- name: Create the storage pool directory
+  ansible.builtin.file:
+    path: "{{ libvirt_pool_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+
+- name: Define the storage pool
+  community.libvirt.virt_pool:
+    name: "{{ libvirt_pool_name }}"
+    command: define
+    xml: "{{ lookup('template', 'pool.xml.j2') }}"
+
+- name: Start the storage pool
+  community.libvirt.virt_pool:
+    name: "{{ libvirt_pool_name }}"
+    state: active
+    autostart: true
+
+- name: Configure AppArmor for the pool
+  ansible.builtin.import_tasks: apparmor.yml
+
+# Installed before the network is defined so that the very first `net-start`
+# already has somewhere to call into.
+- name: Configure inbound port forwarding
+  ansible.builtin.import_tasks: nat_forward.yml
+
+- name: Define the VM network
+  community.libvirt.virt_net:
+    name: "{{ libvirt_net_name }}"
+    command: define
+    xml: "{{ lookup('template', 'network.xml.j2') }}"
+
+- name: Start the VM network
+  community.libvirt.virt_net:
+    name: "{{ libvirt_net_name }}"
+    state: active
+    autostart: true

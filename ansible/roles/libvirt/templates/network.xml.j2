@@ -1,0 +1,15 @@
+<!-- {{ ansible_managed }} -->
+<!-- NAT with DNS but no DHCP: guests are addressed statically by cloud-init,
+     which keeps Terraform and the Ansible inventory in agreement. -->
+<network>
+  <name>{{ libvirt_net_name }}</name>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='{{ libvirt_net_bridge }}' stp='on' delay='0'/>
+  <domain name='{{ libvirt_net_name }}.lan' localOnly='yes'/>
+  <ip address='{{ libvirt_net_gateway }}' netmask='{{ libvirt_net_netmask }}'>
+  </ip>
+</network>
