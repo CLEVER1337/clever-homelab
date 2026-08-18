@@ -1,0 +1,8 @@
+---
+# Bare Debian -> usable hypervisor. Run this before Terraform: it creates the
+# storage pool and the network that Terraform then expects to already exist.
+- name: Turn the bare Debian box into a KVM hypervisor
+  hosts: hypervisors
+  roles:
+    - common
+    - libvirt
