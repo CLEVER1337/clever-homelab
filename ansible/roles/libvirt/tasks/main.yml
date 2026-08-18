@@ -68,7 +68,15 @@
   community.libvirt.virt_pool:
     name: "{{ libvirt_pool_name }}"
     state: active
-    autostart: true
+
+# Not `autostart: true` on the task above — the module silently ignores it when
+# `state` is also given, and the pool then never comes back after a host reboot.
+# Keyed off the symlink libvirt creates rather than `virsh pool-info` output,
+# which is localised and cannot be parsed reliably.
+- name: Make the storage pool start at boot
+  ansible.builtin.command: virsh pool-autostart {{ libvirt_pool_name }}
+  args:
+    creates: /etc/libvirt/storage/autostart/{{ libvirt_pool_name }}.xml
 
 - name: Configure AppArmor for the pool
   ansible.builtin.import_tasks: apparmor.yml
@@ -88,4 +96,11 @@
   community.libvirt.virt_net:
     name: "{{ libvirt_net_name }}"
     state: active
-    autostart: true
+
+# Same module quirk as the pool above. Without this the guests come up after a
+# reboot with no NIC, and the port-forwarding hook never fires either — it runs
+# on network start.
+- name: Make the VM network start at boot
+  ansible.builtin.command: virsh net-autostart {{ libvirt_net_name }}
+  args:
+    creates: /etc/libvirt/qemu/networks/autostart/{{ libvirt_net_name }}.xml
