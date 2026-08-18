@@ -1,0 +1,53 @@
+---
+- name: Install PostgreSQL
+  ansible.builtin.apt:
+    name:
+      - postgresql
+      - python3-psycopg2 # required by the community.postgresql modules
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Enable PostgreSQL
+  ansible.builtin.systemd:
+    name: postgresql
+    enabled: true
+    state: started
+
+# Generated on the machine and never leaves it. `creates` makes this a one-shot:
+# re-running the play must not roll the password out from under a working app.
+- name: Generate the database password once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      openssl rand -base64 36 | tr -d '\n' > {{ forgejo_config_dir }}/db_password
+      && chmod 0600 {{ forgejo_config_dir }}/db_password
+    creates: "{{ forgejo_config_dir }}/db_password"
+    executable: /bin/bash
+
+- name: Read the database password
+  ansible.builtin.slurp:
+    src: "{{ forgejo_config_dir }}/db_password"
+  register: forgejo_db_password_raw
+  no_log: true
+
+- name: Expose the database password to templates
+  ansible.builtin.set_fact:
+    forgejo_db_password: "{{ forgejo_db_password_raw.content | b64decode }}"
+  no_log: true
+
+- name: Create the database role
+  community.postgresql.postgresql_user:
+    name: "{{ forgejo_db_user }}"
+    password: "{{ forgejo_db_password }}"
+    state: present
+  become_user: postgres
+  no_log: true
+
+- name: Create the database
+  community.postgresql.postgresql_db:
+    name: "{{ forgejo_db_name }}"
+    owner: "{{ forgejo_db_user }}"
+    encoding: UTF-8
+    state: present
+  become_user: postgres

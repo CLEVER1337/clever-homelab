@@ -1,0 +1,65 @@
+; {{ ansible_managed }}
+; Edited by Ansible — changes made through the web UI's admin config page will
+; be overwritten on the next run. Change the variables in group_vars instead.
+
+APP_NAME = {{ forgejo_app_name }}
+RUN_USER = {{ forgejo_user }}
+RUN_MODE = prod
+WORK_PATH = {{ forgejo_home }}
+
+[server]
+PROTOCOL  = http
+DOMAIN    = {{ forgejo_domain }}
+ROOT_URL  = https://{{ forgejo_domain }}/
+; Bound to loopback on purpose: Caddy is the only thing that may talk to it.
+HTTP_ADDR = 127.0.0.1
+HTTP_PORT = {{ forgejo_http_port }}
+
+; Forgejo's own SSH server, so git-over-ssh never touches the system sshd
+; and the `git` user needs no shell access of its own.
+DISABLE_SSH      = false
+START_SSH_SERVER = true
+SSH_DOMAIN       = {{ forgejo_domain }}
+SSH_PORT         = {{ forgejo_ssh_port }}
+SSH_LISTEN_PORT  = {{ forgejo_ssh_port }}
+
+APP_DATA_PATH    = {{ forgejo_home }}/data
+LFS_START_SERVER = true
+LFS_JWT_SECRET   = {{ forgejo_secrets['LFS_JWT_SECRET'] }}
+
+[database]
+DB_TYPE  = postgres
+HOST     = 127.0.0.1:5432
+NAME     = {{ forgejo_db_name }}
+USER     = {{ forgejo_db_user }}
+PASSWD   = {{ forgejo_db_password }}
+SSL_MODE = disable
+
+[repository]
+ROOT = {{ forgejo_home }}/data/repositories
+
+[security]
+; Skips the browser-based installer; the admin account is made from the CLI.
+INSTALL_LOCK   = true
+SECRET_KEY     = {{ forgejo_secrets['SECRET_KEY'] }}
+INTERNAL_TOKEN = {{ forgejo_secrets['INTERNAL_TOKEN'] }}
+
+[oauth2]
+JWT_SECRET = {{ forgejo_secrets['JWT_SECRET'] }}
+
+[service]
+DISABLE_REGISTRATION = {{ forgejo_disable_registration | ternary('true', 'false') }}
+REQUIRE_SIGNIN_VIEW  = {{ forgejo_require_signin_view | ternary('true', 'false') }}
+
+[actions]
+; CI is on, but no runner is registered yet — that is a separate step.
+ENABLED = true
+
+[packages]
+; Built-in OCI registry, so container images can live next to their source.
+ENABLED = true
+
+[log]
+MODE      = console
+LEVEL     = info
+ROOT_PATH = /var/log/forgejo

@@ -1,0 +1,117 @@
+---
+- name: Create the forgejo system user
+  ansible.builtin.user:
+    name: "{{ forgejo_user }}"
+    system: true
+    shell: /bin/bash
+    home: "{{ forgejo_home }}"
+    create_home: true
+
+- name: Create directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(forgejo_user) }}"
+    group: "{{ item.owner | default(forgejo_user) }}"
+    mode: "{{ item.mode | default('0750') }}"
+  loop:
+    - { path: "{{ forgejo_home }}/data" }
+    - { path: "{{ forgejo_home }}/data/repositories" }
+    - { path: /var/log/forgejo }
+    - { path: "{{ forgejo_config_dir }}", owner: root, mode: "0750" }
+
+# Config is root-owned and group-readable by forgejo: the service reads it but
+# a compromised Forgejo process cannot rewrite its own secrets.
+- name: Let forgejo read its config directory
+  ansible.builtin.file:
+    path: "{{ forgejo_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ forgejo_user }}"
+    mode: "0750"
+
+- name: Set up PostgreSQL
+  ansible.builtin.import_tasks: postgres.yml
+
+- name: Download the Forgejo binary
+  ansible.builtin.get_url:
+    url: "https://codeberg.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-{{ forgejo_arch }}"
+    dest: "{{ forgejo_bin }}"
+    checksum: "sha256:https://codeberg.org/forgejo/forgejo/releases/download/v{{ forgejo_version }}/forgejo-{{ forgejo_version }}-linux-{{ forgejo_arch }}.sha256"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart forgejo
+
+# Forgejo derives these from itself so the formats are guaranteed valid.
+# Same one-shot pattern as the DB password: regenerating SECRET_KEY on a live
+# instance makes every stored token and 2FA secret undecryptable.
+- name: Generate instance secrets once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      {{ forgejo_bin }} generate secret {{ item }} | tr -d '\n' > {{ forgejo_config_dir }}/{{ item | lower }}
+      && chmod 0640 {{ forgejo_config_dir }}/{{ item | lower }}
+      && chown root:{{ forgejo_user }} {{ forgejo_config_dir }}/{{ item | lower }}
+    creates: "{{ forgejo_config_dir }}/{{ item | lower }}"
+    executable: /bin/bash
+  loop:
+    - SECRET_KEY
+    - INTERNAL_TOKEN
+    - JWT_SECRET
+    - LFS_JWT_SECRET
+
+- name: Read instance secrets
+  ansible.builtin.slurp:
+    src: "{{ forgejo_config_dir }}/{{ item | lower }}"
+  register: forgejo_secrets_raw
+  loop:
+    - SECRET_KEY
+    - INTERNAL_TOKEN
+    - JWT_SECRET
+    - LFS_JWT_SECRET
+  no_log: true
+
+- name: Expose instance secrets to templates
+  ansible.builtin.set_fact:
+    forgejo_secrets: "{{ forgejo_secrets | default({}) | combine({item.item: item.content | b64decode}) }}"
+  loop: "{{ forgejo_secrets_raw.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+
+- name: Write app.ini
+  ansible.builtin.template:
+    src: app.ini.j2
+    dest: "{{ forgejo_config_dir }}/app.ini"
+    owner: root
+    group: "{{ forgejo_user }}"
+    mode: "0640"
+  notify: Restart forgejo
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: forgejo.service.j2
+    dest: /etc/systemd/system/forgejo.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart forgejo
+
+- name: Flush handlers so Forgejo is running before we create the admin
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable Forgejo
+  ansible.builtin.systemd:
+    name: forgejo
+    enabled: true
+    state: started
+
+- name: Wait for Forgejo to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ forgejo_http_port }}"
+    timeout: 120
+
+- name: Set up the admin account
+  ansible.builtin.import_tasks: admin.yml

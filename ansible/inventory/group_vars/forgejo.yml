@@ -1,0 +1,36 @@
+---
+forgejo_version: "16.0.2"
+forgejo_arch: amd64
+
+forgejo_app_name: Clever Homelab
+
+# First account, created from the CLI since the web installer is locked out.
+# The password is generated on the VM and printed once, at the end of the run.
+forgejo_admin_user: clever
+forgejo_admin_email: sanya.veselkov.811@gmail.com
+
+forgejo_user: git
+forgejo_home: /var/lib/forgejo
+forgejo_config_dir: /etc/forgejo
+forgejo_bin: /usr/local/bin/forgejo
+
+# How the world addresses this instance. `forgejo_domain` is what goes in the
+# TLS certificate and in every clone URL Forgejo prints, so getting it wrong is
+# annoying to undo — pick it now.
+forgejo_domain: git.homelab.lan
+forgejo_http_port: 3000 # loopback only; Caddy terminates TLS in front
+forgejo_ssh_port: 2222 # Forgejo's built-in SSH server, not the system sshd
+
+# Homelab default: you make the accounts, nobody self-registers.
+forgejo_disable_registration: true
+forgejo_require_signin_view: false
+
+forgejo_db_name: forgejo
+forgejo_db_user: forgejo
+
+# --- TLS ----------------------------------------------------------------------
+# `internal` = Caddy's own CA. No public DNS needed, works entirely offline, but
+# you must trust its root cert once per client (README explains how).
+# Switch to `acme` only if forgejo_domain is a real domain that resolves publicly.
+caddy_tls_mode: internal
+caddy_acme_email: ""

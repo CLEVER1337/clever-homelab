@@ -1,0 +1,44 @@
+---
+# INSTALL_LOCK is on, so the web installer is skipped entirely and the first
+# account has to be made from the CLI. One-shot, guarded by a marker file.
+
+- name: Generate the initial admin password once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      openssl rand -base64 24 | tr -d '\n' > {{ forgejo_config_dir }}/admin_password
+      && chmod 0600 {{ forgejo_config_dir }}/admin_password
+    creates: "{{ forgejo_config_dir }}/admin_password"
+    executable: /bin/bash
+  register: forgejo_admin_password_created
+
+- name: Read the initial admin password
+  ansible.builtin.slurp:
+    src: "{{ forgejo_config_dir }}/admin_password"
+  register: forgejo_admin_password_raw
+  no_log: true
+
+- name: Create the admin account
+  ansible.builtin.command:
+    cmd: >-
+      {{ forgejo_bin }} admin user create
+      --admin
+      --username {{ forgejo_admin_user }}
+      --email {{ forgejo_admin_email }}
+      --password {{ (forgejo_admin_password_raw.content | b64decode) | quote }}
+      --must-change-password=true
+      --config {{ forgejo_config_dir }}/app.ini
+  become_user: "{{ forgejo_user }}"
+  environment:
+    GITEA_WORK_DIR: "{{ forgejo_home }}"
+  when: forgejo_admin_password_created is changed
+  no_log: true
+
+- name: Show the initial credentials
+  ansible.builtin.debug:
+    msg:
+      - "Forgejo admin: {{ forgejo_admin_user }}"
+      - "Initial password: {{ forgejo_admin_password_raw.content | b64decode }}"
+      - "You will be asked to change it on first login."
+      - "Also kept at {{ forgejo_config_dir }}/admin_password on the VM."
+  when: forgejo_admin_password_created is changed
