@@ -1,0 +1,17 @@
+---
+# Everything that runs after `terraform apply` has produced the guests.
+- name: Configure the Forgejo guest
+  hosts: forgejo
+
+  pre_tasks:
+    # A freshly built guest is still running cloud-init, which is doing its own
+    # apt work. Starting ours alongside it just deadlocks on the dpkg lock.
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      timeout: 900
+
+  roles:
+    - common
+    - forgejo
+    - caddy
