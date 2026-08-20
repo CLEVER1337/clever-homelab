@@ -56,3 +56,27 @@ sudo partprobe /dev/nvme0n1
 GPT numbers table entries, not disk order, so this becomes `nvme0n1p8` even
 though it sits physically between `p4` and `p6`. Put whatever it is called into
 the pool's `device:` field, then run `make bootstrap`.
+
+## Dual-boot clock
+
+This host boots Windows as well, and the two disagree about the hardware clock:
+Windows keeps it in local time, systemd expects UTC. Every Linux boot then came
+up three hours ahead and jumped backwards once timesyncd corrected it — long
+enough for a service starting at boot to record a timestamp from the future.
+
+`make bootstrap` fixes the Linux half (`timedatectl set-local-rtc 0`). The
+Windows half is a one-off, and **without it the drift comes straight back** —
+Windows rewrites the clock in local time the next time it boots. In an
+Administrator PowerShell:
+
+```powershell
+reg add HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation `
+  /v RealTimeIsUniversal /t REG_DWORD /d 1 /f
+```
+
+Then check from Linux that the two agree — `RTC time` should differ from
+`Universal time` by seconds, not hours:
+
+```bash
+timedatectl
+```
