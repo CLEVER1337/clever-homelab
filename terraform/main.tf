@@ -1,19 +1,41 @@
-# Downloaded once, then used as the read-only backing file for every guest.
-# Each VM's own disk is a thin copy-on-write layer on top, so N machines cost
-# roughly one image plus whatever they actually write.
+locals {
+  # Which pool each machine's disk belongs in. `pool` is optional, so a machine
+  # that names none falls back to the default.
+  vm_pool = { for name, cfg in var.vms : name => coalesce(cfg.pool, var.storage_pool) }
+}
+
+# The read-only backing file every guest's disk is layered on. Each VM's own
+# disk is a thin copy-on-write layer over it, so N machines cost roughly one
+# image plus whatever they actually write.
+#
+# One copy per pool in use, rather than one shared copy plus cross-pool backing
+# references. The duplicate costs ~3 GB on a volume sized in hundreds, and it
+# keeps each pool self-contained: no guest depends on a file in a filesystem
+# that might not be mounted.
 resource "libvirt_volume" "base" {
+  for_each = toset(values(local.vm_pool))
+
   name   = "debian-13-genericcloud-amd64.qcow2"
-  pool   = var.storage_pool
+  pool   = each.key
   source = var.base_image_url
   format = "qcow2"
+}
+
+# `base` gained a for_each above. Without this, Terraform would read the old
+# un-keyed address as deleted and destroy the image the running Forgejo disk is
+# layered on, taking the machine with it. The key is the literal default pool
+# name because moved blocks cannot reference variables.
+moved {
+  from = libvirt_volume.base
+  to   = libvirt_volume.base["homelab"]
 }
 
 resource "libvirt_volume" "root" {
   for_each = var.vms
 
   name           = "${each.key}-root.qcow2"
-  pool           = var.storage_pool
-  base_volume_id = libvirt_volume.base.id
+  pool           = local.vm_pool[each.key]
+  base_volume_id = libvirt_volume.base[local.vm_pool[each.key]].id
   size           = each.value.disk_gb * 1024 * 1024 * 1024
   format         = "qcow2"
 }
@@ -25,7 +47,7 @@ resource "libvirt_cloudinit_disk" "seed" {
   for_each = var.vms
 
   name = "${each.key}-seed.iso"
-  pool = var.storage_pool
+  pool = local.vm_pool[each.key]
 
   user_data = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
     hostname       = each.key

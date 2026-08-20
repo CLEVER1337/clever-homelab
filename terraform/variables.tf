@@ -34,7 +34,11 @@ variable "admin_user" {
 # consumes them, so the two tools never contend over the same resource.
 
 variable "storage_pool" {
-  description = "Name of the libvirt storage pool holding VM disks."
+  description = <<-EOT
+    Default libvirt pool for machines that do not name one themselves. Every
+    pool listed here must appear in `libvirt_pools` in the Ansible group_vars —
+    Ansible creates them, Terraform only ever refers to them by name.
+  EOT
   type        = string
   default     = "homelab"
 }
@@ -90,6 +94,11 @@ variable "vms" {
     vcpu      = number
     memory_mb = number
     disk_gb   = number
+    # Which pool the disk lands in; omitted means `storage_pool`. Like `disk_gb`
+    # this is destructive to change — libvirt_volume has no update path in the
+    # provider, so moving a machine between pools recreates its disk empty.
+    # Decide placement before the machine exists.
+    pool = optional(string)
   }))
 
   # Sized against a 79 GB root filesystem on the host. Disks are thin, so this
