@@ -133,5 +133,58 @@ variable "vms" {
       memory_mb = 4096
       disk_gb   = 20
     }
+
+    # --- the project's three databases ---------------------------------------
+    # One machine each rather than three engines sharing one. They tune the same
+    # kernel knobs against each other — Elasticsearch wants swap off and a large
+    # `vm.max_map_count`, Postgres wants specific dirty-ratio and hugepage
+    # settings — and a single OOM kill would otherwise take all three down at
+    # once. Separate guests also mean one can be rebuilt without a maintenance
+    # window on the other two.
+    #
+    # All three sit in `homelab-db`, the 49 GB partition, so that a runaway
+    # table cannot fill the filesystem the hypervisor itself boots from. Their
+    # ceilings total 30 GB, leaving room for the base image and for one of them
+    # to be raised later without repartitioning.
+    #
+    # Nothing here serves Forgejo. Forgejo keeps its own Postgres on its own VM
+    # and stays self-contained — losing the project's databases must not take
+    # the git server with it.
+
+    postgres = {
+      ip   = "10.42.0.20"
+      vcpu = 2
+      # The smallest RAM of the three because Postgres leans on the host page
+      # cache rather than a private heap; shared_buffers wants roughly a quarter
+      # of this, not most of it.
+      memory_mb = 3072
+      disk_gb   = 8
+      pool      = "homelab-db"
+    }
+
+    clickhouse = {
+      ip   = "10.42.0.21"
+      vcpu = 4
+      # ClickHouse assumes far more memory than this and will happily plan a
+      # query that needs all of it, so `max_memory_usage` has to be capped in
+      # config or a single wide GROUP BY takes the machine out. Columnar
+      # compression is why 10 GB of disk goes a long way here.
+      memory_mb = 4096
+      disk_gb   = 10
+      pool      = "homelab-db"
+    }
+
+    elasticsearch = {
+      ip   = "10.42.0.22"
+      vcpu = 2
+      # Heap gets half of this and the rest stays free for Lucene's mmap'd
+      # segments — that split is why the VM needs 4 GB to give the JVM 2.
+      memory_mb = 4096
+      # The largest disk of the three: the inverted index plus stored source
+      # roughly doubles what you feed it, and the flood-stage watermark makes
+      # indices read-only at 95% full, so the usable share of this is ~11 GB.
+      disk_gb = 12
+      pool    = "homelab-db"
+    }
   }
 }
