@@ -1,7 +1,22 @@
 ---
 # --- libvirt storage ----------------------------------------------------------
-libvirt_pool_name: homelab
-libvirt_pool_path: /var/lib/libvirt/homelab
+# One entry per pool. A pool with a `device` gets its own filesystem on that
+# partition; one without lives on whatever already backs its path, which for
+# `homelab` is the host's root.
+#
+# The split exists so a guest that grows into its `disk_gb` ceiling can only
+# exhaust its own pool. Databases sit on the dedicated volume because their
+# growth comes from data, which no cleanup policy can cap — unlike an image
+# registry or a container cache, which can always be pruned.
+#
+# `device` must already be partitioned. See README, "Second storage volume".
+# The pool name is what `pool` refers to in terraform/variables.tf.
+libvirt_pools:
+  - name: homelab
+    path: /var/lib/libvirt/homelab
+  - name: homelab-db
+    path: /var/lib/libvirt/homelab-db
+    device: /dev/nvme0n1p8
 
 # --- libvirt network ----------------------------------------------------------
 # NAT, no DHCP: guests get fixed addresses from cloud-init instead, which keeps

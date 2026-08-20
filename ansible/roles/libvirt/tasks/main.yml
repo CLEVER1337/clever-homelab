@@ -50,35 +50,10 @@
     append: true
   notify: Warn about group membership
 
-- name: Create the storage pool directory
-  ansible.builtin.file:
-    path: "{{ libvirt_pool_path }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0711"
+- name: Import the pool storage tasks
+  ansible.builtin.import_tasks: pools.yml
 
-- name: Define the storage pool
-  community.libvirt.virt_pool:
-    name: "{{ libvirt_pool_name }}"
-    command: define
-    xml: "{{ lookup('template', 'pool.xml.j2') }}"
-
-- name: Start the storage pool
-  community.libvirt.virt_pool:
-    name: "{{ libvirt_pool_name }}"
-    state: active
-
-# Not `autostart: true` on the task above — the module silently ignores it when
-# `state` is also given, and the pool then never comes back after a host reboot.
-# Keyed off the symlink libvirt creates rather than `virsh pool-info` output,
-# which is localised and cannot be parsed reliably.
-- name: Make the storage pool start at boot
-  ansible.builtin.command: virsh pool-autostart {{ libvirt_pool_name }}
-  args:
-    creates: /etc/libvirt/storage/autostart/{{ libvirt_pool_name }}.xml
-
-- name: Configure AppArmor for the pool
+- name: Configure AppArmor for the pools
   ansible.builtin.import_tasks: apparmor.yml
 
 # Installed before the network is defined so that the very first `net-start`

@@ -1,0 +1,126 @@
+---
+# Storage pools, and the filesystems the ones that ask for it sit on.
+#
+# Pools are created before the network below, and before Terraform runs at all:
+# Terraform only ever consumes pools by name, it never defines them.
+
+- name: Select the pools backed by their own device
+  ansible.builtin.set_fact:
+    libvirt_backed_pools: "{{ libvirt_pools | selectattr('device', 'defined') | list }}"
+
+- name: Stat the backing devices
+  ansible.builtin.stat:
+    path: "{{ item.device }}"
+  register: libvirt_backing_devices
+  loop: "{{ libvirt_backed_pools }}"
+  loop_control:
+    label: "{{ item.device }}"
+
+# Partitioning is deliberately not automated. A playbook that runs `sgdisk`
+# against a variable is one typo away from rewriting the partition table of a
+# disk that also holds Windows, and it is a once-per-host operation besides.
+- name: Verify the backing devices exist
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isblk | default(false)
+    fail_msg: >-
+      {{ item.item.device }} is not a block device. Create the partition first —
+      see README, "Second storage volume".
+    success_msg: "{{ item.item.device }} is present."
+  loop: "{{ libvirt_backing_devices.results }}"
+  loop_control:
+    label: "{{ item.item.device }}"
+
+# `force` stays at its default of false, so the module refuses to touch a device
+# that already carries a filesystem. Re-running this cannot wipe a live pool.
+#
+# -m 1 instead of ext4's default 5% reserved-for-root: on a 50 GB volume that
+# default holds back 2.5 GB, and qemu does not write these images as root, so
+# the reserve buys nothing here.
+- name: Create the pool filesystems
+  community.general.filesystem:
+    dev: "{{ item.device }}"
+    fstype: ext4
+    opts: -m 1
+  loop: "{{ libvirt_backed_pools }}"
+  loop_control:
+    label: "{{ item.device }}"
+
+- name: Read the pool filesystem UUIDs
+  ansible.builtin.command: blkid -s UUID -o value {{ item.device }}
+  register: libvirt_pool_uuids
+  changed_when: false
+  loop: "{{ libvirt_backed_pools }}"
+  loop_control:
+    label: "{{ item.device }}"
+
+# By UUID, not /dev/nvme0n1p8: partition numbers move if the table is ever
+# rewritten, and this pool landing silently on the root filesystem is the exact
+# failure it was created to prevent.
+#
+# `nofail` keeps a missing volume from dropping the host into an emergency shell
+# at boot — on a machine that dual-boots into Windows and often has no monitor
+# attached, that is a bad way to fail. The check below covers what nofail hides.
+- name: Mount the pool filesystems
+  ansible.posix.mount:
+    path: "{{ item.item.path }}"
+    src: "UUID={{ item.stdout }}"
+    fstype: ext4
+    opts: defaults,noatime,nofail
+    state: mounted
+  loop: "{{ libvirt_pool_uuids.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+# Without this, a volume that failed to mount leaves an ordinary directory on
+# the root filesystem in its place, and libvirt fills the host's root instead of
+# reporting anything.
+- name: Verify the pool volumes are really mounted
+  ansible.builtin.command: mountpoint -q {{ item.path }}
+  changed_when: false
+  loop: "{{ libvirt_backed_pools }}"
+  loop_control:
+    label: "{{ item.path }}"
+
+# Runs after the mounts, so the mode lands on the mounted filesystem's root
+# rather than on the directory hidden underneath it.
+- name: Create the storage pool directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0711"
+  loop: "{{ libvirt_pools }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Define the storage pools
+  community.libvirt.virt_pool:
+    name: "{{ item.name }}"
+    command: define
+    xml: "{{ lookup('template', 'pool.xml.j2') }}"
+  loop: "{{ libvirt_pools }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Start the storage pools
+  community.libvirt.virt_pool:
+    name: "{{ item.name }}"
+    state: active
+  loop: "{{ libvirt_pools }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# Not `autostart: true` on the task above — the module silently ignores it when
+# `state` is also given, and the pool then never comes back after a host reboot.
+# Keyed off the symlink libvirt creates rather than `virsh pool-info` output,
+# which is localised and cannot be parsed reliably.
+- name: Make the storage pools start at boot
+  ansible.builtin.command: virsh pool-autostart {{ item.name }}
+  args:
+    creates: /etc/libvirt/storage/autostart/{{ item.name }}.xml
+  loop: "{{ libvirt_pools }}"
+  loop_control:
+    label: "{{ item.name }}"

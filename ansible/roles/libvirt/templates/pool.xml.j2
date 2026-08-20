@@ -1,7 +1,8 @@
 <!-- {{ ansible_managed }} -->
+<!-- Rendered once per entry in libvirt_pools; `item` is that entry. -->
 <pool type='dir'>
-  <name>{{ libvirt_pool_name }}</name>
+  <name>{{ item.name }}</name>
   <target>
-    <path>{{ libvirt_pool_path }}</path>
+    <path>{{ item.path }}</path>
   </target>
 </pool>

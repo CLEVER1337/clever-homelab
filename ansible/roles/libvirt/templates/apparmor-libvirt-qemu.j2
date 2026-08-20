@@ -14,4 +14,6 @@
 # provider hardcodes the driver to raw for any path it is given, and would
 # hand qemu a qcow2 to interpret as a raw device (see disk_def.go:22 and
 # domain.go:620 in v0.8.3). Silent corruption beats a clean permission error.
-{{ libvirt_pool_path }}/** rwk,
+{% for pool in libvirt_pools %}
+{{ pool.path }}/** rwk,
+{% endfor %}

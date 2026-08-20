@@ -16,7 +16,7 @@
     path: /etc/apparmor.d/local/abstractions
   register: libvirt_apparmor_local
 
-- name: Let qemu read backing images in the pool
+- name: Let qemu read backing images in the pools
   ansible.builtin.template:
     src: apparmor-libvirt-qemu.j2
     dest: /etc/apparmor.d/local/abstractions/libvirt-qemu
