@@ -109,7 +109,7 @@ variable "vms" {
       ip        = "10.42.0.10"
       vcpu      = 2
       memory_mb = 4096
-      disk_gb   = 40
+      disk_gb   = 25
     }
   }
 }
