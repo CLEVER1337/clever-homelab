@@ -1,0 +1,116 @@
+---
+# The project's PostgreSQL, on a machine of its own.
+
+- name: Install PostgreSQL
+  ansible.builtin.apt:
+    name:
+      - "postgresql-{{ pg_version }}"
+      - python3-psycopg2 # required by the community.postgresql modules
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the secret directory
+  ansible.builtin.file:
+    path: "{{ db_secret_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Write the tuning drop-in
+  ansible.builtin.template:
+    src: homelab.conf.j2
+    dest: "/etc/postgresql/{{ pg_version }}/main/conf.d/homelab.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Restart postgresql
+
+- name: Enable PostgreSQL
+  ansible.builtin.systemd:
+    name: postgresql
+    enabled: true
+    state: started
+
+# listen_addresses only takes effect on restart, and the tasks below connect
+# over the socket — but a queued restart running after them would drop the
+# application's connections at an arbitrary moment instead of now.
+- name: Flush handlers so the running config matches the files
+  ansible.builtin.meta: flush_handlers
+
+# Generated on the machine and never leaves it. `creates` makes this one-shot:
+# re-running the play must not roll the password out from under the app.
+- name: Generate the application password once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      openssl rand -base64 36 | tr -d '\n' > {{ db_secret_dir }}/pg_{{ pg_app_user }}_password
+      && chmod 0600 {{ db_secret_dir }}/pg_{{ pg_app_user }}_password
+    creates: "{{ db_secret_dir }}/pg_{{ pg_app_user }}_password"
+    executable: /bin/bash
+  register: pg_password_created
+
+- name: Read the application password
+  ansible.builtin.slurp:
+    src: "{{ db_secret_dir }}/pg_{{ pg_app_user }}_password"
+  register: pg_app_password_raw
+  no_log: true
+
+- name: Expose the application password
+  ansible.builtin.set_fact:
+    pg_app_password: "{{ pg_app_password_raw.content | b64decode }}"
+  no_log: true
+
+- name: Create the application role
+  community.postgresql.postgresql_user:
+    name: "{{ pg_app_user }}"
+    password: "{{ pg_app_password }}"
+    state: present
+  become_user: postgres
+  no_log: true
+
+- name: Create the application database
+  community.postgresql.postgresql_db:
+    name: "{{ pg_app_db }}"
+    owner: "{{ pg_app_user }}"
+    encoding: UTF-8
+    state: present
+  become_user: postgres
+
+# Postgres 15 stopped granting CREATE on the public schema to everyone. Without
+# this the role owns the database but cannot create a table in it, which
+# surfaces as a permission error on the application's very first migration.
+- name: Give the application role its schema
+  community.postgresql.postgresql_privs:
+    db: "{{ pg_app_db }}"
+    type: schema
+    objs: public
+    roles: "{{ pg_app_user }}"
+    privs: ALL
+    state: present
+  become_user: postgres
+
+# Managed as entries rather than by templating pg_hba.conf, so the distro file
+# and its local/peer rules stay intact — replacing it is how you lock yourself
+# out of `sudo -u postgres psql`.
+- name: Allow the application in from the guest and pod networks
+  community.postgresql.postgresql_pg_hba:
+    dest: "/etc/postgresql/{{ pg_version }}/main/pg_hba.conf"
+    contype: host
+    databases: "{{ pg_app_db }}"
+    users: "{{ pg_app_user }}"
+    source: "{{ item }}"
+    method: scram-sha-256
+    state: present
+  loop: "{{ db_allowed_networks }}"
+  notify: Reload postgresql
+
+- name: Report the application credentials
+  ansible.builtin.debug:
+    msg:
+      - "PostgreSQL ready on {{ ansible_host }}:5432"
+      - "  database: {{ pg_app_db }}   user: {{ pg_app_user }}"
+      - "  password: {{ pg_app_password }}"
+      - "Kept at {{ db_secret_dir }}/pg_{{ pg_app_user }}_password on the VM."
+  when: pg_password_created is changed

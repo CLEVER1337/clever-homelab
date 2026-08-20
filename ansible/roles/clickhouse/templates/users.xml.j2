@@ -1,0 +1,51 @@
+<!-- {{ ansible_managed }}
+
+     ClickHouse ships a `default` user with no password that accepts
+     connections from anywhere. That is the single most important thing this
+     file changes: default is pinned to loopback, and the application gets its
+     own account restricted to the networks that need it.
+
+     The password is stored as a SHA256 hex digest, which is what ClickHouse
+     compares against — the plaintext never reaches this file.
+-->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_memory_usage>{{ clickhouse_max_query_memory }}</max_memory_usage>
+            <max_bytes_before_external_group_by>{{ clickhouse_max_bytes_before_external_group_by }}</max_bytes_before_external_group_by>
+            <!-- Refuse rather than swap the guest to death. -->
+            <max_execution_time>300</max_execution_time>
+        </default>
+    </profiles>
+
+    <users>
+        <default>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+        </default>
+
+        <{{ clickhouse_app_user }}>
+            <password_sha256_hex>{{ clickhouse_app_password | hash('sha256') }}</password_sha256_hex>
+            <networks>
+{% for net in db_allowed_networks %}
+                <ip>{{ net }}</ip>
+{% endfor %}
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <default_database>{{ clickhouse_app_db }}</default_database>
+
+            <!-- This is what actually confines the account, and it has to be
+                 grants. The `<databases>` element that looks like it would do
+                 the job is a scope filter for row policies, not an access
+                 rule: a user defined with it can still SHOW DATABASES and read
+                 system.users. Without an explicit <grants> block an XML user
+                 gets everything. -->
+            <grants>
+                <query>GRANT ALL ON {{ clickhouse_app_db }}.*</query>
+            </grants>
+        </{{ clickhouse_app_user }}>
+    </users>
+</clickhouse>

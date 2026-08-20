@@ -16,6 +16,35 @@
     - forgejo
     - caddy
 
+# One play per engine rather than one over `databases`: they share nothing but
+# the allow-list, and a failure installing ClickHouse should not stop Postgres
+# from being configured.
+- name: Configure PostgreSQL
+  hosts: postgres
+
+  pre_tasks:
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      timeout: 900
+
+  roles:
+    - common
+    - postgres
+
+- name: Configure ClickHouse
+  hosts: clickhouse
+
+  pre_tasks:
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      timeout: 900
+
+  roles:
+    - common
+    - clickhouse
+
 # Two plays, not one: an agent cannot join until the server is up and has
 # written its node token, and the agent role reads that token off the server
 # through hostvars. Running them as a single play would race.

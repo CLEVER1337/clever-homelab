@@ -1,0 +1,32 @@
+<!-- {{ ansible_managed }}
+
+     A drop-in under config.d. ClickHouse merges these over config.xml, so the
+     distro file stays untouched and an upgrade never conflicts.
+-->
+<clickhouse>
+    <!-- Loopback for clickhouse-client on the box, plus this guest's address.
+         Deliberately not ::/0 — nothing sits between these guests, so the
+         listen address is the only thing deciding who can reach the port. -->
+    <listen_host>127.0.0.1</listen_host>
+    <listen_host>{{ ansible_host }}</listen_host>
+
+    <max_server_memory_usage>{{ clickhouse_max_server_memory }}</max_server_memory_usage>
+
+    <!-- Sized down from the default of 8 GiB, which alone exceeds this guest. -->
+    <mark_cache_size>536870912</mark_cache_size>
+
+    <!-- background_pool_size is deliberately left at its default. Lowering it
+         looks like an obvious win on a 4 vCPU guest, but it is validated
+         against number_of_free_entries_in_pool_to_execute_mutation (20) at
+         startup: pool * merges_mutations_concurrency_ratio has to exceed it,
+         so anything under 11 makes the server refuse to start outright. The
+         merge threads are disk-bound here anyway, and memory — the constraint
+         that actually binds on this box — is capped above. -->
+
+    <logger>
+        <level>information</level>
+        <!-- Bounded: this guest has 10 GB and ClickHouse is talkative. -->
+        <size>256M</size>
+        <count>3</count>
+    </logger>
+</clickhouse>

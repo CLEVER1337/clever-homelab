@@ -1,0 +1,23 @@
+---
+# Not packaged by Debian, so this comes from ClickHouse's own apt repository.
+# Unpinned within the repo — the version below is what `state: present` will
+# install on a fresh machine, and is recorded so a rebuild is reproducible.
+clickhouse_version: "26.7.4.58"
+
+clickhouse_app_db: app
+clickhouse_app_user: app
+
+# --- memory -------------------------------------------------------------------
+# ClickHouse assumes a machine far larger than this one and will plan a query
+# that needs all of it. Left at its defaults it sizes caches from total RAM and
+# an unbounded GROUP BY takes the guest out via the OOM killer.
+#
+# max_server_memory_usage caps the whole server; max_memory_usage caps one
+# query. Both are set, because the first alone still lets a single query starve
+# everything else on the box.
+clickhouse_max_server_memory: 2684354560 # 2.5 GiB of the guest's 4
+clickhouse_max_query_memory: 1610612736 # 1.5 GiB
+
+# Spilling to disk is slower than failing, but on a 10 GB volume it is also
+# bounded. Without it a large sort simply errors.
+clickhouse_max_bytes_before_external_group_by: 805306368 # 768 MiB

@@ -1,0 +1,11 @@
+---
+# Applies the /sys write immediately; without this it would only take effect
+# after the next boot, and ClickHouse would keep warning until then.
+- name: Apply tmpfiles
+  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/clickhouse-thp.conf
+  changed_when: true
+
+- name: Restart clickhouse
+  ansible.builtin.systemd:
+    name: clickhouse-server
+    state: restarted

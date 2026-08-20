@@ -1,0 +1,12 @@
+---
+- name: Restart postgresql
+  ansible.builtin.systemd:
+    name: postgresql
+    state: restarted
+
+# pg_hba changes are picked up by a reload; there is no reason to drop
+# connections for them.
+- name: Reload postgresql
+  ansible.builtin.systemd:
+    name: postgresql
+    state: reloaded

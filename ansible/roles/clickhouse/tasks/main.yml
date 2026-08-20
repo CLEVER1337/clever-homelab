@@ -1,0 +1,147 @@
+---
+# ClickHouse from the vendor's apt repository — Debian does not package it.
+
+- name: Create the apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the repository key
+  ansible.builtin.get_url:
+    url: https://packages.clickhouse.com/rpm/lts/repodata/repomd.xml.key
+    dest: /etc/apt/keyrings/clickhouse.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+# `signed-by` scopes the key to this one repository. A key in trusted.gpg.d
+# would be allowed to sign packages for every source on the machine, Debian's
+# included.
+- name: Add the ClickHouse repository
+  ansible.builtin.deb822_repository:
+    name: clickhouse
+    types: deb
+    uris: https://packages.clickhouse.com/deb
+    suites: stable
+    components: main
+    architectures: amd64
+    signed_by: /etc/apt/keyrings/clickhouse.asc
+    state: present
+
+- name: Create the secret directory
+  ansible.builtin.file:
+    path: "{{ db_secret_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# Generated before the package is installed, because the users drop-in written
+# further down needs it and that has to land as early as possible.
+#
+# The package's postinst offers to set a password for the `default` user and,
+# run non-interactively as it is here, leaves it empty. apt then starts the
+# service straight away, so for a moment an empty-password superuser exists.
+#
+# It is not reachable: stock config.xml binds loopback only, and the drop-in
+# that adds this guest's address is written in the same run as the one pinning
+# `default` to loopback. The order that matters is config-then-restart, which
+# the handler guarantees — not install-then-config.
+- name: Generate the application password once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      openssl rand -base64 36 | tr -d '\n' > {{ db_secret_dir }}/clickhouse_{{ clickhouse_app_user }}_password
+      && chmod 0600 {{ db_secret_dir }}/clickhouse_{{ clickhouse_app_user }}_password
+    creates: "{{ db_secret_dir }}/clickhouse_{{ clickhouse_app_user }}_password"
+    executable: /bin/bash
+  register: clickhouse_password_created
+
+- name: Read the application password
+  ansible.builtin.slurp:
+    src: "{{ db_secret_dir }}/clickhouse_{{ clickhouse_app_user }}_password"
+  register: clickhouse_app_password_raw
+  no_log: true
+
+- name: Expose the application password
+  ansible.builtin.set_fact:
+    clickhouse_app_password: "{{ clickhouse_app_password_raw.content | b64decode }}"
+  no_log: true
+
+- name: Install ClickHouse
+  ansible.builtin.apt:
+    name:
+      - clickhouse-server
+      - clickhouse-client
+    state: present
+    update_cache: true
+
+# tmpfiles.d rather than sysctl: this is a /sys attribute, not a sysctl, and
+# systemd reapplies these on every boot without a unit of our own.
+- name: Keep transparent hugepages out of ClickHouse's way
+  ansible.builtin.template:
+    src: thp.conf.j2
+    dest: /etc/tmpfiles.d/clickhouse-thp.conf
+    mode: "0644"
+  notify:
+    - Apply tmpfiles
+    - Restart clickhouse
+
+- name: Write the server drop-in
+  ansible.builtin.template:
+    src: homelab.xml.j2
+    dest: /etc/clickhouse-server/config.d/homelab.xml
+    owner: root
+    group: clickhouse
+    mode: "0640"
+  notify: Restart clickhouse
+
+- name: Write the users drop-in
+  ansible.builtin.template:
+    src: users.xml.j2
+    dest: /etc/clickhouse-server/users.d/homelab.xml
+    owner: root
+    group: clickhouse
+    mode: "0640"
+  no_log: true
+  notify: Restart clickhouse
+
+- name: Enable ClickHouse
+  ansible.builtin.systemd:
+    name: clickhouse-server
+    enabled: true
+    state: started
+
+- name: Flush handlers so the running config matches the files
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for ClickHouse to accept connections
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 9000
+    timeout: 120
+
+# Over the loopback socket as `default`, which needs no password — the app user
+# is confined to its own database and cannot create it.
+- name: Create the application database
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/clickhouse-client
+      - --host
+      - 127.0.0.1
+      - --query
+      - "CREATE DATABASE IF NOT EXISTS {{ clickhouse_app_db }}"
+  register: clickhouse_db_created
+  changed_when: false
+
+- name: Report the application credentials
+  ansible.builtin.debug:
+    msg:
+      - "ClickHouse ready on {{ ansible_host }} — native 9000, HTTP 8123"
+      - "  database: {{ clickhouse_app_db }}   user: {{ clickhouse_app_user }}"
+      - "  password: {{ clickhouse_app_password }}"
+      - "Kept at {{ db_secret_dir }}/clickhouse_{{ clickhouse_app_user }}_password on the VM."
+  when: clickhouse_password_created is changed

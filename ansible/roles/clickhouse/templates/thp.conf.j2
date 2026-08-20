@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+#
+# ClickHouse warns about transparent hugepages in `always` mode at every start:
+# it hands out 2 MB pages for allocations needing a fraction of one, and
+# ClickHouse's allocation pattern is the one that turns that into real bloat.
+# `madvise` keeps them available to code that asks for them.
+w /sys/kernel/mm/transparent_hugepage/enabled - - - - madvise

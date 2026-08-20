@@ -1,0 +1,19 @@
+---
+# Shared by all three database guests.
+
+# Who may connect. Nothing here is exposed to the LAN — there is no DNAT for
+# these ports — so this is about which guests can reach which.
+#
+# The pod network is listed alongside the guest network because flannel
+# masquerades pod traffic leaving the cluster: a connection from a pod arrives
+# with the k3s node's own 10.42.0.x address, not the pod's. The 10.44.0.0/16
+# entry is there so that a future change to that behaviour, or a direct route,
+# does not silently lock the application out.
+db_allowed_networks:
+  - 10.42.0.0/24
+  - "{{ k3s_cluster_cidr }}"
+
+# Generated passwords live here, one file each, root-only. Same one-shot
+# pattern as Forgejo's: a re-run must never roll a password out from under a
+# running application.
+db_secret_dir: /etc/homelab

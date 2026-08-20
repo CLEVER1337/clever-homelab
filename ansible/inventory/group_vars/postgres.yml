@@ -1,0 +1,36 @@
+---
+# The project's PostgreSQL. Not to be confused with the one the forgejo role
+# installs on the Forgejo VM for Forgejo's own use — that one stays where it
+# is, so losing this machine cannot take the git server down with it.
+
+# Debian 13 ships 17 as `postgresql`. Pinned by major version because the data
+# directory path contains it and an unattended major upgrade does not migrate.
+pg_version: 17
+
+# Rename these to whatever the application expects before the first run: the
+# database is created once and this role will not rename it afterwards.
+pg_app_db: app
+pg_app_user: app
+
+# --- tuning for a 3 GB machine ------------------------------------------------
+# Defaults assume a far larger box. The two that matter most:
+#
+# shared_buffers is Postgres' own cache, conventionally a quarter of RAM. Going
+# higher is counterproductive here because the same pages then sit in both this
+# and the kernel page cache, and on a 3 GB guest that duplication is expensive.
+#
+# effective_cache_size caches nothing — it tells the planner how much cache it
+# can expect between Postgres and the kernel, which decides index scan versus
+# sequential scan. Too low and it stops using indexes it should.
+pg_shared_buffers: 768MB
+pg_effective_cache_size: 2GB
+
+# Per sort or hash node, not per connection — one query can use several at once.
+# 8 MB against max_connections of 100 is a worst case well beyond RAM, which is
+# why the connection count is capped low rather than left at the default.
+pg_work_mem: 8MB
+pg_maintenance_work_mem: 192MB
+pg_max_connections: 100
+
+# The application connects through a pool; this is not the number of clients.
+# Raising it is usually the wrong fix — add a pooler instead.

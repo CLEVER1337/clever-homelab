@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+#
+# A drop-in rather than edits to postgresql.conf: Debian's file already ends
+# with `include_dir 'conf.d'`, settings here win over anything above, and an
+# apt upgrade never produces a merge prompt.
+
+# Loopback for local psql, plus this guest's address for everything else. Not
+# '*' — there is no firewall between the guests, so the listen address is the
+# only thing deciding who can even open a socket.
+listen_addresses = 'localhost,{{ ansible_host }}'
+port = 5432
+
+max_connections = {{ pg_max_connections }}
+shared_buffers = {{ pg_shared_buffers }}
+effective_cache_size = {{ pg_effective_cache_size }}
+work_mem = {{ pg_work_mem }}
+maintenance_work_mem = {{ pg_maintenance_work_mem }}
+
+# This guest's disk is NVMe-backed. The default of 4 assumes a spindle and
+# makes the planner overvalue sequential scans.
+random_page_cost = 1.1
+
+# Passwords are hashed with SCRAM rather than the older md5. Anything
+# connecting has to speak it, which every current client library does.
+password_encryption = scram-sha-256
+
+# Log slow queries, not every query. On a homelab box the write volume of
+# log_statement = 'all' is itself a performance problem.
+log_min_duration_statement = 1000
+log_line_prefix = '%m [%p] %q%u@%d '
