@@ -47,13 +47,23 @@
 # Asking the server rather than the agent: the agent's own kubelet reports
 # healthy well before the control plane has accepted it, so checking locally
 # would pass on a node that never actually joined.
+#
+# `kubectl wait` rather than `get -o jsonpath=...`: the module runs the command
+# without a shell and splits it with shlex, which eats the quotes a jsonpath
+# filter needs. `@.type=="Ready"` arrives as `@.type==Ready`, kubectl rejects it
+# as an unrecognised identifier, and the task retries forever against a cluster
+# that was healthy the whole time.
+#
+# The retries cover only the gap before the node object exists at all — `wait`
+# returns NotFound immediately for a node it has never seen, rather than
+# blocking until it appears.
 - name: Wait for this node to register with the cluster
   ansible.builtin.command: >-
-    /usr/local/bin/k3s kubectl get node {{ inventory_hostname }}
-    -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+    /usr/local/bin/k3s kubectl wait --for=condition=Ready
+    node/{{ inventory_hostname }} --timeout=60s
   delegate_to: "{{ groups['k3s_server'][0] }}"
   register: k3s_node_ready
-  until: k3s_node_ready.stdout == "True"
-  retries: 30
+  until: k3s_node_ready.rc == 0
+  retries: 5
   delay: 10
   changed_when: false
