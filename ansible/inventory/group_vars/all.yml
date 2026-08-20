@@ -9,6 +9,10 @@ common_packages:
   - rsync
   - vim
   - ca-certificates
+  # Its own package on Debian, and absent from the guests' cloud image. The
+  # hypervisor's clock is corrected against it after every boot — see the RTC
+  # comment in roles/common/tasks/main.yml.
+  - systemd-timesyncd
 
 # sshd hardening applied everywhere. Password auth off is the point of it;
 # make sure your key works before the first run finishes.

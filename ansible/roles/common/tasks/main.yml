@@ -10,6 +10,40 @@
     update_cache: true
     cache_valid_time: 3600
 
+# After the package install above: Debian ships timesyncd as its own package,
+# and the cloud image the guests are built from does not carry it.
+- name: Keep the clock synchronised
+  ansible.builtin.systemd:
+    name: systemd-timesyncd
+    enabled: true
+    state: started
+
+- name: Check how the hardware clock is interpreted
+  ansible.builtin.command: timedatectl show --property=LocalRTC --value
+  register: common_local_rtc
+  changed_when: false
+
+# This box dual-boots, and Windows keeps the RTC in local time by default while
+# systemd expects UTC. Left as it was, every Linux boot came up three hours off
+# and then jumped backwards the moment timesyncd corrected it — visible in the
+# journal as libvirtd starting at 16:00 and logging its next line at 13:02.
+#
+# Cosmetic until something records a timestamp in that window. Caddy signs its
+# own certificates here, and one issued then carries a notBefore in the future
+# and is refused; Elasticsearch would roll a daily index into the wrong day.
+#
+# NOT --adjust-system-clock. That flag sets the system clock *from* the RTC
+# under the new interpretation, which would apply the wrong value we are trying
+# to get rid of. Without it the sync runs the other way, and the RTC is written
+# from the NTP-corrected system clock, which is the direction that fixes it.
+#
+# Windows has to agree, or it rewrites the RTC in local time on its next boot
+# and the drift comes back. See README, "Dual-boot clock".
+- name: Read the hardware clock as UTC
+  ansible.builtin.command: timedatectl set-local-rtc 0
+  when: common_local_rtc.stdout | trim == "yes"
+  changed_when: true
+
 - name: Install unattended-upgrades
   ansible.builtin.apt:
     name: unattended-upgrades
