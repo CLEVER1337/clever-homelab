@@ -19,6 +19,12 @@ common_packages:
 ssh_permit_root_login: "no"
 ssh_password_authentication: "no"
 
+# Pod network of the k3s cluster. Here rather than in group_vars/k3s.yml
+# because the database guests need it for their connection allow-lists, and
+# they are not in the k3s group. Changing it means rebuilding the cluster —
+# see the comment in group_vars/k3s.yml.
+k3s_cluster_cidr: 10.44.0.0/16
+
 # Root filesystem usage at which the daily guard marks its unit failed.
 # The hypervisor only has a 79 GB root and guest disks are thin, so their
 # ceilings sum to more than exists — 80% leaves room to react.

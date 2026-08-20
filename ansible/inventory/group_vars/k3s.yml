@@ -20,7 +20,9 @@ k3s_api_port: 6443
 #
 # These cannot be changed on a running cluster — k3s writes them into the
 # datastore at first start. Getting them right now avoids a rebuild later.
-k3s_cluster_cidr: 10.44.0.0/16
+#
+# k3s_cluster_cidr is defined in group_vars/all.yml, not here: the database
+# guests need it for their allow-lists and are not in this group.
 k3s_service_cidr: 10.45.0.0/16
 # CoreDNS's own service address. Must sit inside k3s_service_cidr.
 k3s_cluster_dns: 10.45.0.10
