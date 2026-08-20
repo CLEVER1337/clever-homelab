@@ -125,13 +125,54 @@ variable "vms" {
     runner = {
       ip   = "10.42.0.11"
       vcpu = 4
-      # The layer cache is what fills this, not the checkouts. 20 GB holds a
-      # handful of images and needs `docker system prune` on a timer — without
-      # pruning, any ceiling fills eventually, it only changes how long it
-      # takes. Raise it before that bites rather than after: growing a disk
-      # recreates it empty, same as `pool` above.
+      # The layer cache is what fills this, not the checkouts. Cut from 20 to
+      # make room for the k3s nodes on the same pool, which makes `docker
+      # system prune` on a timer load-bearing rather than good hygiene: at
+      # 10 GB an unpruned cache reaches the ceiling in weeks, not months.
+      # Growing it later recreates the disk empty, same as `pool` above.
       memory_mb = 4096
-      disk_gb   = 20
+      disk_gb   = 10
+    }
+
+    # --- k3s -----------------------------------------------------------------
+    # One server and two agents. All three on `homelab` rather than the old
+    # spinning disk, which keeps etcd off ~100 IOPS — every etcd write is an
+    # fsync, and that is the one k3s component latency actually breaks.
+    #
+    # The cost is that this fills the root pool: these three plus the machines
+    # above come to 66 GB of ceilings against 69 GB of filesystem. Thin
+    # provisioning means only a few GB of that is real today, but nothing more
+    # fits here without either the 931 GB drive or a second NVMe.
+    #
+    # Memory is tighter still. With the five machines above this totals ~26.5
+    # of 31 GB, leaving the host ~4.5 GB including the per-guest qemu overhead.
+    # Each agent can schedule roughly 1.8 GB of pods once kubelet, containerd
+    # and the OS have taken their share — plan the workload against that number,
+    # not against 2.5.
+
+    k3s-master = {
+      ip   = "10.42.0.30"
+      vcpu = 2
+      # The server is the smallest of the three: it runs the API server, the
+      # scheduler and embedded etcd, and hosts no workload. Do not shrink it
+      # further — etcd degrades into leader elections under memory pressure,
+      # which takes the whole cluster with it.
+      memory_mb = 2560
+      disk_gb   = 8
+    }
+
+    k3s-worker-1 = {
+      ip        = "10.42.0.31"
+      vcpu      = 2
+      memory_mb = 2560
+      disk_gb   = 10
+    }
+
+    k3s-worker-2 = {
+      ip        = "10.42.0.32"
+      vcpu      = 2
+      memory_mb = 2560
+      disk_gb   = 10
     }
 
     # --- the project's three databases ---------------------------------------
