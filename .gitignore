@@ -20,3 +20,6 @@ ansible/collections/
 
 # Guest host keys, trusted on first use and reset on rebuild
 ansible/inventory/.known_hosts_guests
+
+# Fetched from the k3s server on every run. Cluster-admin credentials.
+ansible/inventory/.kubeconfig
