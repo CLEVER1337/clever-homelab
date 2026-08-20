@@ -9,14 +9,24 @@ ssh_public_key       = "ssh-ed25519 AAAA... you@laptop" # contents of ~/.ssh/id_
 # Must match `ansible_user` in ansible/inventory/hosts.yml.
 admin_user = "supervisor"
 
-# Defaults below are fine to leave alone. Uncomment to resize the Forgejo VM
-# or to add a second machine later.
+# Defaults below are fine to leave alone. Uncomment to resize a machine or to
+# add another. Every entry also needs an address in ansible/inventory/hosts.yml.
+#
+# `pool` is optional and defaults to `homelab`, on the host's root filesystem;
+# name `homelab-db` to put a disk on the dedicated partition instead. Both it
+# and `disk_gb` recreate the disk empty when changed — see variables.tf.
 #
 # vms = {
 #   forgejo = {
 #     ip        = "10.42.0.10"
 #     vcpu      = 2
 #     memory_mb = 4096
-#     disk_gb   = 60
+#     disk_gb   = 25
+#   }
+#   runner = {
+#     ip        = "10.42.0.11"
+#     vcpu      = 4
+#     memory_mb = 4096
+#     disk_gb   = 20
 #   }
 # }

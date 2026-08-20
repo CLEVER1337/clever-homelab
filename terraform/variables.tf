@@ -111,5 +111,27 @@ variable "vms" {
       memory_mb = 4096
       disk_gb   = 25
     }
+
+    # Forgejo Actions runner. It gets a machine of its own rather than a slot on
+    # the Forgejo VM because it executes whatever is in a repository's workflow
+    # file: `act_runner` needs the docker socket, which is root on the box it
+    # runs on, and that must not be the box holding the git data and the
+    # database behind it.
+    #
+    # vcpu is deliberately above forgejo's — threads overcommit and the host has
+    # 16, while a build is the one workload here that can use them. Memory does
+    # not overcommit, so 4 GB is a real subtraction from the ~26 GB of guest
+    # budget; see the host memory note before raising it.
+    runner = {
+      ip   = "10.42.0.11"
+      vcpu = 4
+      # The layer cache is what fills this, not the checkouts. 20 GB holds a
+      # handful of images and needs `docker system prune` on a timer — without
+      # pruning, any ceiling fills eventually, it only changes how long it
+      # takes. Raise it before that bites rather than after: growing a disk
+      # recreates it empty, same as `pool` above.
+      memory_mb = 4096
+      disk_gb   = 20
+    }
   }
 }
