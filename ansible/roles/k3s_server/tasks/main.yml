@@ -1,0 +1,88 @@
+---
+# The control plane. Runs before the agent play, because an agent cannot join
+# until this node is up and holding a token.
+
+- name: Write the server config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  notify: Restart k3s
+
+- name: Install the k3s server unit
+  ansible.builtin.template:
+    src: k3s.service.j2
+    dest: /etc/systemd/system/k3s.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart k3s
+
+- name: Enable the k3s server
+  ansible.builtin.systemd:
+    name: k3s
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# Config and binary changes are queued as handlers; the token and kubeconfig
+# below have to be read from a server that has already applied them.
+- name: Flush handlers so the server is current before we read from it
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for the API server to accept connections
+  ansible.builtin.wait_for:
+    host: "{{ k3s_server_ip }}"
+    port: "{{ k3s_api_port }}"
+    timeout: 300
+
+# Written once the datastore is initialised, which is slightly after the port
+# opens. Agents cannot join without it.
+- name: Wait for the node token
+  ansible.builtin.wait_for:
+    path: /var/lib/rancher/k3s/server/node-token
+    timeout: 120
+
+- name: Read the node token
+  ansible.builtin.slurp:
+    src: /var/lib/rancher/k3s/server/node-token
+  register: k3s_node_token_raw
+  no_log: true
+
+# Consumed by the agent role through hostvars in the next play.
+- name: Expose the node token to the agents
+  ansible.builtin.set_fact:
+    k3s_node_token: "{{ k3s_node_token_raw.content | b64decode | trim }}"
+  no_log: true
+
+- name: Read the generated kubeconfig
+  ansible.builtin.slurp:
+    src: /etc/rancher/k3s/k3s.yaml
+  register: k3s_kubeconfig_raw
+  no_log: true
+
+# Copied verbatim, still pointing at 127.0.0.1. That looks wrong for a remote
+# copy and is deliberate: the guest network is NAT-only and not routable from
+# the workstation, so the only way in is an SSH tunnel through the hypervisor —
+# and at the far end of one, 127.0.0.1 is exactly right. It is also a name the
+# API server's certificate already covers, which the guest address only is
+# because `tls-san` puts it there.
+- name: Save the kubeconfig next to the inventory
+  ansible.builtin.copy:
+    content: "{{ k3s_kubeconfig_raw.content | b64decode }}"
+    dest: "{{ k3s_kubeconfig_local }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Report how to reach the cluster
+  ansible.builtin.debug:
+    msg:
+      - "kubeconfig: {{ k3s_kubeconfig_local }} — gitignored, and cluster-admin"
+      - "Open the tunnel, leave it running:"
+      - "  ssh -N -L {{ k3s_api_port }}:{{ k3s_server_ip }}:{{ k3s_api_port }} {{ hostvars['homelab'].ansible_user }}@{{ hostvars['homelab'].ansible_host }}"
+      - "Then, in another shell:"
+      - "  export KUBECONFIG={{ k3s_kubeconfig_local }} && kubectl get nodes"

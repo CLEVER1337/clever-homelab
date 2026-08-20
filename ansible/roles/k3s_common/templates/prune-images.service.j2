@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Reclaim disk from unreferenced container images
+# Pruning without a running containerd is a no-op that reports failure.
+After=k3s.service k3s-agent.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/k3s-prune-images

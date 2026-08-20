@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+#
+# An agent carries none of the cluster-wide settings — no CIDRs, no disabled
+# components. It learns all of that from the server when it joins, which is why
+# changing them means rebuilding the server, not re-running this.
+#
+# The token is cluster-admin equivalent: anyone holding it can register a node
+# and read every secret scheduled onto it. Hence 0600 and no_log on the task
+# that writes this file.
+
+# Without this the node registers under its FQDN — see the server's config.
+node-name: "{{ inventory_hostname }}"
+
+server: "https://{{ k3s_server_ip }}:{{ k3s_api_port }}"
+token: "{{ hostvars[groups['k3s_server'][0]].k3s_node_token }}"

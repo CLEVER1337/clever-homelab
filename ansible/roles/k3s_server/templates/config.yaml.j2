@@ -1,0 +1,40 @@
+# {{ ansible_managed }}
+#
+# k3s reads this at every start. Flags live here rather than in the unit's
+# ExecStart so that changing one is a template diff instead of a shell edit.
+#
+# NOTE: cluster-cidr and service-cidr are recorded in the datastore the first
+# time the server starts. Editing them afterwards does not migrate anything —
+# the cluster has to be rebuilt. See the comment in group_vars/k3s.yml.
+
+# cloud-init sets the guest's hostname to the FQDN, so left alone k3s would
+# register this node as k3s-master.homelab.lan. Pinned to the inventory name
+# instead, so `kubectl get nodes` and the Ansible inventory agree.
+node-name: "{{ inventory_hostname }}"
+
+cluster-cidr: "{{ k3s_cluster_cidr }}"
+service-cidr: "{{ k3s_service_cidr }}"
+cluster-dns: "{{ k3s_cluster_dns }}"
+
+{% if k3s_disable %}
+disable:
+{% for component in k3s_disable %}
+  - {{ component }}
+{% endfor %}
+{% endif %}
+
+# 2.5 GB of RAM runs the API server, the scheduler and the SQLite datastore and
+# nothing else. Without this taint a workload can land here, and when the API
+# server is what gets OOM-killed every agent stays up while the cluster stops
+# accepting changes — the confusing failure, not the obvious one.
+node-taint:
+  - "CriticalAddonsOnly=true:NoExecute"
+
+# Addresses the API server's certificate must be valid for. 127.0.0.1 covers
+# on-node kubectl; the guest address covers the agents and anything reaching in
+# through the hypervisor.
+tls-san:
+  - "{{ k3s_server_ip }}"
+
+# Root-only. The fetched copy on the workstation is the one meant for daily use.
+write-kubeconfig-mode: "0600"

@@ -1,0 +1,46 @@
+---
+# Applies to the whole k3s tree: the server and both agents.
+
+# Pinned rather than tracking the stable channel, for the same reason the
+# libvirt provider is pinned — an unattended minor bump is a cluster-wide
+# event. Check https://update.k3s.io/v1-release/channels before raising it.
+k3s_version: v1.36.3+k3s1
+k3s_arch: amd64
+
+# --- addressing ---------------------------------------------------------------
+# The server is what agents dial to join, and what `tls-san` has to cover.
+k3s_server_ip: 10.42.0.30
+k3s_api_port: 6443
+
+# k3s defaults to 10.42.0.0/16 for pods and 10.43.0.0/16 for services, and the
+# first of those swallows this homelab's entire guest network (10.42.0.0/24).
+# Left alone, a pod's address could collide with a database VM's and the node
+# would route cluster-internal instead of out to the machine. Moved clear of
+# both, with room between them.
+#
+# These cannot be changed on a running cluster — k3s writes them into the
+# datastore at first start. Getting them right now avoids a rebuild later.
+k3s_cluster_cidr: 10.44.0.0/16
+k3s_service_cidr: 10.45.0.0/16
+# CoreDNS's own service address. Must sit inside k3s_service_cidr.
+k3s_cluster_dns: 10.45.0.10
+
+# --- what not to install ------------------------------------------------------
+# Traefik would be a second ingress behind the Caddy that already terminates
+# TLS on the Forgejo VM, and it costs memory this cluster does not have. Ports
+# 80 and 443 on the host are DNAT'd to Forgejo anyway, so an in-cluster ingress
+# could not claim them: Caddy proxies to a NodePort instead.
+#
+# servicelb stays — it is how a LoadBalancer service gets an address on bare
+# metal, and it is nearly free.
+k3s_disable:
+  - traefik
+
+# --- image pruning ------------------------------------------------------------
+# Load-bearing, not hygiene: the agents have 10 GB disks. containerd never
+# reclaims an image on its own, so without this the ceiling arrives in weeks.
+k3s_prune_schedule: "Sun *-*-* 04:00:00"
+
+# Where the fetched cluster credentials land on the machine running Ansible.
+# Gitignored — this file is full cluster-admin.
+k3s_kubeconfig_local: "{{ inventory_dir }}/.kubeconfig"

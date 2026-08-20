@@ -1,0 +1,59 @@
+---
+# Joins a node to the cluster the server play just brought up.
+
+# A clear failure here beats a confusing one later: without the token the agent
+# starts, fails to register, and sits in a restart loop that looks like a
+# network problem. This happens when the agents are run without the server play
+# in the same invocation — `ansible-playbook site.yml --limit k3s_agents`.
+- name: Check the server handed over a token
+  ansible.builtin.assert:
+    that:
+      - groups['k3s_server'] | length > 0
+      - hostvars[groups['k3s_server'][0]].k3s_node_token is defined
+    fail_msg: >-
+      No node token available. The k3s_server play has to run in the same
+      invocation as this one — it reads the token off the server and passes it
+      through hostvars. Run site.yml without a --limit that excludes the server.
+
+- name: Write the agent config
+  ansible.builtin.template:
+    src: config.yaml.j2
+    dest: /etc/rancher/k3s/config.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart k3s
+
+- name: Install the k3s agent unit
+  ansible.builtin.template:
+    src: k3s-agent.service.j2
+    dest: /etc/systemd/system/k3s-agent.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart k3s
+
+- name: Enable the k3s agent
+  ansible.builtin.systemd:
+    name: k3s-agent
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Flush handlers so the node is joined before we check for it
+  ansible.builtin.meta: flush_handlers
+
+# Asking the server rather than the agent: the agent's own kubelet reports
+# healthy well before the control plane has accepted it, so checking locally
+# would pass on a node that never actually joined.
+- name: Wait for this node to register with the cluster
+  ansible.builtin.command: >-
+    /usr/local/bin/k3s kubectl get node {{ inventory_hostname }}
+    -o jsonpath={.status.conditions[?(@.type=="Ready")].status}
+  delegate_to: "{{ groups['k3s_server'][0] }}"
+  register: k3s_node_ready
+  until: k3s_node_ready.stdout == "True"
+  retries: 30
+  delay: 10
+  changed_when: false

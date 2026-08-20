@@ -15,3 +15,34 @@
     - common
     - forgejo
     - caddy
+
+# Two plays, not one: an agent cannot join until the server is up and has
+# written its node token, and the agent role reads that token off the server
+# through hostvars. Running them as a single play would race.
+- name: Bring up the k3s control plane
+  hosts: k3s_server
+
+  pre_tasks:
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      timeout: 900
+
+  roles:
+    - common
+    - k3s_common
+    - k3s_server
+
+- name: Join the k3s agents
+  hosts: k3s_agents
+
+  pre_tasks:
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      timeout: 900
+
+  roles:
+    - common
+    - k3s_common
+    - k3s_agent

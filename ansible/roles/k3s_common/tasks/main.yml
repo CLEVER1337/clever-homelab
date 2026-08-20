@@ -1,0 +1,88 @@
+---
+# Everything both the server and the agents need. Nothing here starts k3s —
+# that is the job of the role that knows which half of the cluster this is.
+#
+# No swap handling: the Debian cloud image these guests are built from ships
+# none, and modern k3s no longer refuses to start when it finds some. If swap
+# is ever added to a node, revisit this — the kubelet's memory accounting still
+# assumes it is absent.
+
+# Bridged traffic has to traverse iptables for Service routing and NetworkPolicy
+# to work at all. k3s loads these itself at start, but doing it here means the
+# sysctls below have something to attach to on a cold boot.
+- name: Load the kernel modules k3s networking needs
+  community.general.modprobe:
+    name: "{{ item }}"
+    state: present
+    persistent: present
+  loop:
+    - overlay
+    - br_netfilter
+
+- name: Set the sysctls k3s networking needs
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-k3s.conf
+    sysctl_set: true
+    reload: true
+  loop:
+    - { name: net.bridge.bridge-nf-call-iptables, value: "1" }
+    - { name: net.bridge.bridge-nf-call-ip6tables, value: "1" }
+    - { name: net.ipv4.ip_forward, value: "1" }
+
+# The release publishes one checksum file covering every artifact; get_url picks
+# the line matching this file's name. A truncated download on this network is
+# the failure mode worth catching — it would otherwise install a binary that
+# starts and then dies without an obvious reason.
+- name: Install the k3s binary
+  ansible.builtin.get_url:
+    url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}/k3s"
+    checksum: "sha256:https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}/sha256sum-{{ k3s_arch }}.txt"
+    dest: /usr/local/bin/k3s
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart k3s
+
+# k3s ships kubectl, crictl and ctr inside the one binary and expects to be
+# called under those names. Without these a node has no working kubectl at all.
+- name: Link the bundled kubectl, crictl and ctr
+  ansible.builtin.file:
+    src: /usr/local/bin/k3s
+    dest: "/usr/local/bin/{{ item }}"
+    state: link
+  loop:
+    - kubectl
+    - crictl
+    - ctr
+
+- name: Create the k3s config directory
+  ansible.builtin.file:
+    path: /etc/rancher/k3s
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the image prune script
+  ansible.builtin.template:
+    src: prune-images.sh.j2
+    dest: /usr/local/sbin/k3s-prune-images
+    mode: "0755"
+    validate: bash -n %s
+
+- name: Install the image prune units
+  ansible.builtin.template:
+    src: "prune-images.{{ item }}.j2"
+    dest: "/etc/systemd/system/k3s-prune-images.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  notify: Reload systemd
+
+- name: Enable the image prune timer
+  ansible.builtin.systemd:
+    name: k3s-prune-images.timer
+    enabled: true
+    state: started
+    daemon_reload: true

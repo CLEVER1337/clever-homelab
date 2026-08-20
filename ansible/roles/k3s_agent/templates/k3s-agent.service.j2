@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+#
+# Same shape as the server unit — the limits and cgroup delegation are for
+# containerd, which the agent supervises too.
+[Unit]
+Description=Lightweight Kubernetes (agent)
+Documentation=https://k3s.io
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+# The server may not be up yet after a host reboot — both come back at once and
+# the order is not guaranteed. The agent retries the join instead of giving up,
+# so a restart loop here is the recovery path, not a fault.
+Restart=always
+RestartSec=5s
+ExecStartPre=-/sbin/modprobe br_netfilter
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/k3s agent
+
+[Install]
+WantedBy=multi-user.target

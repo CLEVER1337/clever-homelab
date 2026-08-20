@@ -1,0 +1,30 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# Drop container images no running or stopped container references.
+# containerd never reclaims them by itself, and these nodes have 10 GB disks.
+#
+# `crictl rmi --prune` only removes unreferenced images, so an image a
+# CrashLoopBackOff pod still needs survives — this cannot break a workload by
+# deleting something out from under it.
+set -euo pipefail
+
+before=$(df --output=avail -k / | tail -1)
+
+/usr/local/bin/k3s crictl rmi --prune >/dev/null 2>&1 || {
+  echo "image prune failed — is k3s running?" >&2
+  exit 1
+}
+
+after=$(df --output=avail -k / | tail -1)
+freed=$(( (after - before) / 1024 ))
+pct=$(df --output=pcent / | tail -1 | tr -d ' %')
+
+echo "pruned unreferenced images, freed ${freed} MB, root now ${pct}% full"
+
+# Loud rather than silent: if pruning ran and the disk is still nearly full,
+# the images were not the problem and someone needs to look.
+if [ "$pct" -ge {{ disk_guard_percent }} ]; then
+  echo "root is still ${pct}% full after pruning" >&2
+  exit 1
+fi

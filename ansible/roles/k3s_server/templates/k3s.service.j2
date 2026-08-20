@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+#
+# Modelled on the unit k3s's own install script writes. The limits and the
+# cgroup delegation are not decoration: k3s supervises containerd, which needs
+# its own cgroup subtree and far more file descriptors than the default.
+[Unit]
+Description=Lightweight Kubernetes (server)
+Documentation=https://k3s.io
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+KillMode=process
+Delegate=yes
+# Killing the cgroup on stop would take every container with it; k3s stops them
+# itself in the right order.
+LimitNOFILE=1048576
+LimitNPROC=infinity
+LimitCORE=infinity
+TasksMax=infinity
+TimeoutStartSec=0
+Restart=always
+RestartSec=5s
+ExecStartPre=-/sbin/modprobe br_netfilter
+ExecStartPre=-/sbin/modprobe overlay
+ExecStart=/usr/local/bin/k3s server
+
+[Install]
+WantedBy=multi-user.target
