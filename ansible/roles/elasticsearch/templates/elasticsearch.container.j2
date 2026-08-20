@@ -1,0 +1,45 @@
+# {{ ansible_managed }}
+#
+# A quadlet. systemd generates elasticsearch.service from this at daemon-reload,
+# so the container is an ordinary unit — `systemctl status elasticsearch`,
+# journal integration, restart policy — with no wrapper script around
+# `podman run` and no separate container lifecycle to reason about.
+
+[Unit]
+Description=Elasticsearch {{ elasticsearch_version }}
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image={{ elasticsearch_image }}:{{ elasticsearch_version }}
+ContainerName=elasticsearch
+
+# Bound to this guest's address, not 0.0.0.0. The container itself listens on
+# all its interfaces; this is the line that decides who can reach it.
+PublishPort={{ ansible_host }}:9200:9200
+
+Volume={{ elasticsearch_data_dir }}:/usr/share/elasticsearch/data:rw
+Volume={{ elasticsearch_config_dir }}/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+
+# Holds ELASTIC_PASSWORD. Mode 0600 and root-owned — the unit is read by
+# systemd as root, so it never needs to be readable by anyone else.
+EnvironmentFile={{ db_secret_dir }}/elasticsearch.env
+
+Environment=ES_JAVA_OPTS=-Xms{{ elasticsearch_heap }} -Xmx{{ elasticsearch_heap }}
+
+# Elasticsearch opens a file per Lucene segment and refuses to start below
+# 65535. The container default is lower on Debian.
+Ulimit=nofile=65535:65535
+# Unlimited, because Elasticsearch checks the limit itself at boot rather than
+# trusting it to be adequate.
+Ulimit=nproc=4096:4096
+
+[Service]
+Restart=always
+# A cold start unpacks the image and forms the cluster; the default 90 seconds
+# is not always enough on this hardware and a timeout here would look like a
+# crash loop.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

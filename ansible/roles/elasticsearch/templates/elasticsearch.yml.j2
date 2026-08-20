@@ -1,0 +1,40 @@
+# {{ ansible_managed }}
+#
+# Bind-mounted read-only into the container, so the settings live in a file
+# under version control rather than in a growing list of environment variables
+# on the unit.
+
+cluster.name: homelab
+node.name: {{ inventory_hostname }}
+
+# Inside the container. What limits exposure is the published port on the host,
+# which is bound to this guest's address only — see the .container file.
+network.host: 0.0.0.0
+http.port: 9200
+
+# One node, and no intention of a second: this guest is 4 GB on a host whose
+# RAM is already spoken for. Without this Elasticsearch waits for a quorum that
+# will never form and never reaches a green state.
+discovery.type: single-node
+
+# Authentication on, TLS off. The transport layer would otherwise demand
+# certificates, which for a single node protect a connection the node makes to
+# itself. HTTP is plaintext because the only clients are on the same NAT
+# network — revisit both if this is ever reachable from further away.
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: false
+xpack.security.transport.ssl.enabled: false
+
+# Basic, not trial: a trial licence expires after 30 days and takes the cluster
+# read-only with it, which is a strange thing to discover a month later.
+xpack.license.self_generated.type: basic
+
+# Machine learning allocates native memory outside the heap and has no use here.
+xpack.ml.enabled: false
+
+# Defaults are 85/90/95 percent. On a 12 GB disk the flood stage arrives with
+# 600 MB left, which is not enough room to delete an index and recover —
+# flood_stage makes every index read-only until a human intervenes.
+cluster.routing.allocation.disk.watermark.low: 80%
+cluster.routing.allocation.disk.watermark.high: 85%
+cluster.routing.allocation.disk.watermark.flood_stage: 90%

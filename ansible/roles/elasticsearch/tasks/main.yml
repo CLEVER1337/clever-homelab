@@ -1,0 +1,192 @@
+---
+# Elasticsearch as a podman container managed by systemd. See group_vars for
+# why this one is not an apt package like the other two.
+
+- name: Install podman
+  ansible.builtin.apt:
+    name: podman
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# Lucene mmaps every segment file, and the default of 65530 is below what
+# Elasticsearch demands. It refuses to start rather than degrade, so this is a
+# hard prerequisite, not tuning.
+- name: Raise vm.max_map_count for Lucene
+  ansible.posix.sysctl:
+    name: vm.max_map_count
+    value: "262144"
+    sysctl_file: /etc/sysctl.d/99-elasticsearch.conf
+    sysctl_set: true
+    reload: true
+
+- name: Create the secret directory
+  ansible.builtin.file:
+    path: "{{ db_secret_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Create the config directory
+  ansible.builtin.file:
+    path: "{{ elasticsearch_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Owned by the container's uid rather than root: the bind mount carries host
+# ownership straight through, and Elasticsearch exits on a data directory it
+# cannot write.
+- name: Create the data directory
+  ansible.builtin.file:
+    path: "{{ elasticsearch_data_dir }}"
+    state: directory
+    owner: "{{ elasticsearch_container_uid }}"
+    group: "{{ elasticsearch_container_gid }}"
+    mode: "0750"
+
+# Two accounts, two secrets: `elastic` is the built-in superuser and is only
+# used by this role to create the second. Same one-shot `creates` pattern as
+# the other databases — a re-run must not roll either out from under the app.
+- name: Generate the passwords once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      openssl rand -base64 36 | tr -d '\n' > {{ db_secret_dir }}/{{ item }}
+      && chmod 0600 {{ db_secret_dir }}/{{ item }}
+    creates: "{{ db_secret_dir }}/{{ item }}"
+    executable: /bin/bash
+  loop:
+    - elasticsearch_elastic_password
+    - elasticsearch_app_password
+  register: es_passwords_created
+
+- name: Read the passwords
+  ansible.builtin.slurp:
+    src: "{{ db_secret_dir }}/{{ item }}"
+  register: es_passwords_raw
+  loop:
+    - elasticsearch_elastic_password
+    - elasticsearch_app_password
+  no_log: true
+
+- name: Expose the passwords
+  ansible.builtin.set_fact:
+    es_elastic_password: "{{ es_passwords_raw.results[0].content | b64decode }}"
+    es_app_password: "{{ es_passwords_raw.results[1].content | b64decode }}"
+  no_log: true
+
+# ELASTIC_PASSWORD is only read the first time a node forms its cluster. On
+# every later start it is ignored, which is why rotating it means the API, not
+# this file.
+- name: Write the container environment file
+  ansible.builtin.copy:
+    dest: "{{ db_secret_dir }}/elasticsearch.env"
+    owner: root
+    group: root
+    mode: "0600"
+    content: "ELASTIC_PASSWORD={{ es_elastic_password }}\n"
+  no_log: true
+  notify: Restart elasticsearch
+
+- name: Write the Elasticsearch config
+  ansible.builtin.template:
+    src: elasticsearch.yml.j2
+    dest: "{{ elasticsearch_config_dir }}/elasticsearch.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart elasticsearch
+
+- name: Install the quadlet unit
+  ansible.builtin.template:
+    src: elasticsearch.container.j2
+    dest: /etc/containers/systemd/elasticsearch.container
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart elasticsearch
+
+# Quadlet turns .container files into units at daemon-reload, so the service
+# does not exist until this has run at least once.
+- name: Generate the unit from the quadlet
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable Elasticsearch
+  ansible.builtin.systemd:
+    name: elasticsearch
+    state: started
+
+- name: Flush handlers so the running container matches the files
+  ansible.builtin.meta: flush_handlers
+
+# A first start pulls roughly a gigabyte of image before it even begins, so
+# this waits far longer than the other two databases.
+- name: Wait for Elasticsearch to answer
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:9200/_cluster/health"
+    user: elastic
+    password: "{{ es_elastic_password }}"
+    force_basic_auth: true
+    status_code: [200]
+  register: es_health
+  until: es_health.status == 200 and es_health.json.status in ['green', 'yellow']
+  retries: 60
+  delay: 10
+  no_log: true
+
+# yellow, not green, is the correct healthy state here: index templates ask for
+# a replica by default and a single node has nowhere to put it. Treating yellow
+# as broken on a one-node cluster means never being satisfied.
+- name: Report the cluster status
+  ansible.builtin.debug:
+    msg: "cluster {{ es_health.json.cluster_name }} is {{ es_health.json.status }} with {{ es_health.json.number_of_nodes }} node(s)"
+
+- name: Create the application role
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:9200/_security/role/{{ elasticsearch_app_user }}"
+    method: PUT
+    user: elastic
+    password: "{{ es_elastic_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      # monitor lets a client call _cluster/health for its own readiness probe
+      # without granting anything that can change cluster state.
+      cluster: [monitor]
+      indices:
+        - names: ["{{ elasticsearch_index_pattern }}"]
+          privileges: [all]
+    status_code: [200]
+  register: es_role
+  changed_when: es_role.json.role.created | default(false)
+
+- name: Create the application user
+  ansible.builtin.uri:
+    url: "http://{{ ansible_host }}:9200/_security/user/{{ elasticsearch_app_user }}"
+    method: PUT
+    user: elastic
+    password: "{{ es_elastic_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      password: "{{ es_app_password }}"
+      roles: ["{{ elasticsearch_app_user }}"]
+    status_code: [200]
+  register: es_user
+  changed_when: es_user.json.created | default(false)
+  no_log: true
+
+- name: Report the application credentials
+  ansible.builtin.debug:
+    msg:
+      - "Elasticsearch {{ elasticsearch_version }} ready on http://{{ ansible_host }}:9200"
+      - "  user: {{ elasticsearch_app_user }}   password: {{ es_app_password }}"
+      - "  may read and write {{ elasticsearch_index_pattern }} and nothing else"
+      - "Superuser `elastic` and both passwords are in {{ db_secret_dir }} on the VM."
+  when: es_passwords_created is changed

@@ -1,0 +1,32 @@
+---
+# Elasticsearch runs as a container here, alone among the three databases.
+# Not a preference: artifacts.elastic.co answers 403 from this network — a
+# clean HTTP/2 refusal from Elastic's own edge, not a DPI drop — so the apt
+# repository and the .deb behind it are both unreachable. The container
+# registry at docker.elastic.co serves normally, and that is the whole reason
+# podman appears on this guest.
+#
+# Matched to the 9.4.1 installed on the workstation. Staying inside one major
+# is what matters — Elastic's client libraries check it and refuse a mismatch —
+# but pinning the patch too keeps development and the homelab identical.
+elasticsearch_version: "9.4.1"
+elasticsearch_image: docker.elastic.co/elasticsearch/elasticsearch
+
+# Half the guest's 4 GB. The other half is not spare: Lucene keeps its segments
+# in mmap'd files served by the page cache, and starving that to enlarge the
+# heap makes search slower, not faster. Never raise this above half.
+elasticsearch_heap: 2g
+
+elasticsearch_data_dir: /var/lib/elasticsearch
+elasticsearch_config_dir: /etc/elasticsearch
+
+# The account the application uses. `elastic` stays a break-glass superuser.
+elasticsearch_app_user: app
+# Indices the application account may touch. Everything else, including the
+# security indices, stays out of reach.
+elasticsearch_index_pattern: "app-*"
+
+# The image runs Elasticsearch as this uid, and a bind-mounted data directory
+# has to be owned by it or the node fails to start with a permissions error.
+elasticsearch_container_uid: 1000
+elasticsearch_container_gid: 0
