@@ -136,8 +136,9 @@ variable "vms" {
 
     # --- k3s -----------------------------------------------------------------
     # One server and two agents. All three on `homelab` rather than the old
-    # spinning disk, which keeps etcd off ~100 IOPS — every etcd write is an
-    # fsync, and that is the one k3s component latency actually breaks.
+    # spinning disk: a single server keeps cluster state in SQLite, not etcd,
+    # and every write to it is an fsync — the one k3s component that ~100 IOPS
+    # would actually break.
     #
     # The cost is that this fills the root pool: these three plus the machines
     # above come to 66 GB of ceilings against 69 GB of filesystem. Thin
@@ -153,10 +154,11 @@ variable "vms" {
     k3s-master = {
       ip   = "10.42.0.30"
       vcpu = 2
-      # The server is the smallest of the three: it runs the API server, the
-      # scheduler and embedded etcd, and hosts no workload. Do not shrink it
-      # further — etcd degrades into leader elections under memory pressure,
-      # which takes the whole cluster with it.
+      # The server is the smallest of the three: API server, scheduler and the
+      # SQLite datastore, with no workload of its own — it gets a NoExecute
+      # taint so nothing schedules here by accident. Do not shrink it further;
+      # when the API server is the process that gets OOM-killed, every other
+      # node is still up but the cluster stops accepting changes.
       memory_mb = 2560
       disk_gb   = 8
     }
