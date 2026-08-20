@@ -1,0 +1,41 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# ifupdown runs every executable in /etc/network/if-up.d after an interface
+# finishes coming up. This one re-applies the guest port forwards.
+#
+# It exists because the libvirt hook alone cannot get them installed at boot.
+# enp5s0 is `allow-hotplug`, so networking.service returns in milliseconds and
+# the DHCP lease lands much later, via udev. libvirtd starts in between, runs
+# its autostart pass, and fires the hook while the host still has no default
+# route and therefore no address to publish anything on.
+#
+# The hook now shrugs that off instead of failing the network start, and this
+# script is what actually lays the rules down once there is an address.
+#
+# It also covers a case the hook never did: a DHCP lease that changes address
+# while the host is up. ifupdown runs if-up.d again on every bring-up, so the
+# rules follow the new address instead of pointing at a stale one.
+
+set -u
+
+# ifupdown exports IFACE. Loopback comes up on every boot and is never the LAN.
+[ "${IFACE:-}" = "lo" ] && exit 0
+
+NETWORK="{{ libvirt_net_name }}"
+HOOK=/etc/libvirt/hooks/network
+
+[ -x "$HOOK" ] || exit 0
+
+# Whether the libvirt network is up, decided by whether its bridge exists.
+# Deliberately not `virsh net-list`: virsh would talk to libvirtd, and on Debian
+# libvirtd is socket-activated, so a query from inside an ifupdown hook could
+# start the daemon in the middle of interface bring-up. Reading the link costs
+# nothing and asks no daemon anything.
+ip link show {{ libvirt_net_bridge }} >/dev/null 2>&1 || exit 0
+
+# `started` is the phase that installs rules; the hook drops them before adding,
+# so running this repeatedly cannot stack duplicates.
+"$HOOK" "$NETWORK" started begin - || true
+
+exit 0

@@ -14,20 +14,38 @@
 # It also re-runs on every network start, including at boot, which is what keeps
 # the rules alive across libvirt restarts that flush and rebuild everything.
 #
+# This script must never exit non-zero. libvirt treats a failing hook as a
+# failing network: it aborts the start, and every guest attached to that network
+# then fails to autostart behind it. At boot the host has no default route yet —
+# enp5s0 is `allow-hotplug`, so ifupdown returns long before DHCP finishes — and
+# a hook that insisted on an address there took the whole homelab down with it.
+#
+# Losing the port forwards costs inbound access. Losing the network costs every
+# guest. So a missing address is a warning here, not an error, and the rules get
+# laid down later by /etc/network/if-up.d/homelab-libvirt-forwards, which fires
+# when the interface actually comes up.
+#
 # Invocation: $1 = network name, $2 = operation.
 
 set -u
 
 NETWORK="{{ libvirt_net_name }}"
+HOST_IP=""
 
 [ "${1:-}" = "$NETWORK" ] || exit 0
 
 # Resolved at run time rather than baked in by Ansible: the host holds a DHCP
 # lease, so a templated address would silently go stale after a lease change.
-lan_dev=$(ip route show default | awk '{print $5; exit}')
-HOST_IP=$(ip -4 -o addr show dev "$lan_dev" scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
-
-[ -n "$HOST_IP" ] || { echo "libvirt hook: no LAN address on $lan_dev" >&2; exit 1; }
+# Called from the branches that need it rather than at the top of the script —
+# libvirt also invokes this hook for phases that touch no rules at all, and
+# failing there aborted a start that had nothing to do with us.
+resolve_host_ip() {
+  local dev
+  dev=$(ip route show default | awk '{print $5; exit}')
+  [ -n "$dev" ] || return 1
+  HOST_IP=$(ip -4 -o addr show dev "$dev" scope global | awk '{print $4}' | cut -d/ -f1 | head -1)
+  [ -n "$HOST_IP" ] || return 1
+}
 
 # Deletes are best-effort: removing a rule that is not there is not an error
 # worth aborting on.
@@ -64,12 +82,18 @@ del_all() {
 
 case "${2:-}" in
   started)
-    # Drop first, so running the hook twice cannot stack duplicate rules.
-    del_all
-    add_all
+    if resolve_host_ip; then
+      # Drop first, so running the hook twice cannot stack duplicate rules.
+      del_all
+      add_all
+    else
+      echo "libvirt hook: no LAN address yet, leaving the port forwards to if-up.d" >&2
+    fi
     ;;
   stopped)
-    del_all
+    # Best effort. With no address there is nothing to match on, and the rules
+    # were never installed in that case anyway.
+    resolve_host_ip && del_all
     ;;
 esac
 

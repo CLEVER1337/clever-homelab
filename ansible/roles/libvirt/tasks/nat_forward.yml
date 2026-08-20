@@ -20,3 +20,13 @@
     # be cycled for the hook to actually fire and lay down the rules.
     - Restart libvirtd
     - Reapply libvirt network
+
+# The hook fires when libvirt starts the network, which at boot happens before
+# the host has an address. This fires when the address arrives. Between them
+# every order works out: whichever runs second finds the other side ready.
+- name: Install the if-up hook that re-applies the forwards
+  ansible.builtin.template:
+    src: if-up-forwards.sh.j2
+    dest: /etc/network/if-up.d/homelab-libvirt-forwards
+    mode: "0755"
+    validate: bash -n %s
