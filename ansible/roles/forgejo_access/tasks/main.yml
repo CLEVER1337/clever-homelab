@@ -1,0 +1,82 @@
+---
+# Everything a guest needs to talk to the git server: its name, and trust in the
+# certificate in front of it. Used by the CI runner, which clones and pushes
+# images, and by the k3s nodes, whose containerd pulls those images back.
+#
+# Both halves exist because of decisions made elsewhere in this repository:
+# there is no DNS on the guest network (libvirt's dnsmasq hands out no leases,
+# so it has no names to serve), and Caddy signs `git.homelab.lan` with a CA it
+# generated itself.
+
+- name: Resolve the git server's name
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ git_server_domain | regex_escape }}$'
+    line: "{{ git_server_ip }} {{ git_server_domain }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+# Caddy writes its local CA the first time it provisions TLS, which is moments
+# after the service starts rather than at install time — hence the retries.
+- name: Wait for Caddy's local CA
+  ansible.builtin.stat:
+    path: "{{ git_server_ca_src }}"
+  delegate_to: "{{ git_server_host }}"
+  register: forgejo_access_ca_stat
+  until: forgejo_access_ca_stat.stat.exists
+  retries: 12
+  delay: 5
+  when: git_server_tls_mode == 'internal'
+
+# Copied from the git guest rather than fetched over the network: Caddy never
+# serves its root, and pulling a CA over the connection it is meant to
+# authenticate would prove nothing anyway.
+- name: Read the root certificate
+  ansible.builtin.slurp:
+    src: "{{ git_server_ca_src }}"
+  delegate_to: "{{ git_server_host }}"
+  register: forgejo_access_ca_raw
+  when: git_server_tls_mode == 'internal'
+
+- name: Install the root certificate
+  ansible.builtin.copy:
+    dest: "{{ homelab_ca_dest }}"
+    content: "{{ forgejo_access_ca_raw.content | b64decode }}"
+    owner: root
+    group: root
+    mode: "0644"
+  register: forgejo_access_ca_installed
+  when: git_server_tls_mode == 'internal'
+
+# This is what folds the file above into /etc/ssl/certs/ca-certificates.crt —
+# the bundle everything else on the guest actually reads, from the runner's own
+# HTTP client to containerd to the trust store bind-mounted into job containers.
+- name: Rebuild the system trust store
+  ansible.builtin.command: update-ca-certificates
+  when: forgejo_access_ca_installed is changed
+  changed_when: true
+
+# A Go process reads the system roots once and caches them for its lifetime, so
+# anything already running when the certificate landed is still refusing it.
+# Only services that exist and are up are touched: on a first run the unit
+# being named here has not been installed yet, and the role that installs it
+# starts it afterwards with the trust store already correct.
+- name: Find which services cached the old trust store
+  ansible.builtin.command: "systemctl is-active {{ item }}"
+  register: forgejo_access_service_state
+  changed_when: false
+  failed_when: false
+  loop: "{{ forgejo_access_reload_services }}"
+  when: forgejo_access_ca_installed is changed
+
+- name: Restart them
+  ansible.builtin.systemd:
+    name: "{{ item.item }}"
+    state: restarted
+  loop: "{{ forgejo_access_service_state.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item | default('') }}"
+  when:
+    - item.stdout is defined
+    - item.stdout == "active"

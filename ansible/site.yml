@@ -31,6 +31,9 @@
   roles:
     - common
     - docker
+    # Before the runner role: the runner's own client and the docker daemon
+    # both need the git server's name and its CA before they are of any use.
+    - forgejo_access
     - forgejo_runner
 
 # One play per engine rather than one over `databases`: they share nothing but
@@ -89,6 +92,9 @@
 
   roles:
     - common
+    # containerd pulls the images CI pushes to Forgejo's registry, so every
+    # node needs the name resolved and the CA trusted before k3s starts.
+    - forgejo_access
     - k3s_common
     - k3s_server
 
@@ -103,5 +109,6 @@
 
   roles:
     - common
+    - forgejo_access
     - k3s_common
     - k3s_agent

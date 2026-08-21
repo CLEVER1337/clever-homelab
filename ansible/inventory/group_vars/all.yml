@@ -25,6 +25,30 @@ ssh_password_authentication: "no"
 # see the comment in group_vars/k3s.yml.
 k3s_cluster_cidr: 10.44.0.0/16
 
+# --- the git server, as the rest of the homelab sees it -----------------------
+# The CI runner clones from Forgejo and pushes images to its registry; the k3s
+# nodes pull those images back. Both need the same two things, and neither is in
+# the forgejo group — a task delegated to another host still resolves variables
+# against the host it is running *for*, so anything belonging to that group has
+# to be reached through hostvars explicitly. Here rather than repeated in two
+# group_vars files, for the same reason k3s_cluster_cidr is here.
+git_server_host: "{{ groups['forgejo'][0] }}"
+git_server_ip: "{{ hostvars[git_server_host].ansible_host }}"
+git_server_domain: "{{ hostvars[git_server_host].forgejo_domain }}"
+git_server_config_dir: "{{ hostvars[git_server_host].forgejo_config_dir }}"
+git_server_tls_mode: "{{ hostvars[git_server_host].caddy_tls_mode }}"
+
+# Where Caddy keeps the root of the CA it signs git.homelab.lan with, when it
+# runs as the Debian package's systemd unit. Only read when caddy_tls_mode is
+# `internal`; switching to acme drops this out entirely.
+git_server_ca_src: /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
+homelab_ca_dest: /usr/local/share/ca-certificates/homelab-caddy.crt
+
+# Services to restart on a guest when that root changes under them — a Go
+# process caches the system trust store for its lifetime. Set per group; a unit
+# that is not installed or not running is skipped.
+forgejo_access_reload_services: []
+
 # Root filesystem usage at which the daily guard marks its unit failed.
 # The hypervisor only has a 79 GB root and guest disks are thin, so their
 # ceilings sum to more than exists — 80% leaves room to react.

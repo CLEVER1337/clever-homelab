@@ -27,7 +27,7 @@
       && chown root:{{ forgejo_runner_server_user }} {{ forgejo_runner_secret_path }}
     creates: "{{ forgejo_runner_secret_path }}"
     executable: /bin/bash
-  delegate_to: "{{ forgejo_runner_server_host }}"
+  delegate_to: "{{ git_server_host }}"
 
 # --secret-file rather than --secret: the secret never appears in the process
 # list on the git guest, where anything with a shell could read it.
@@ -44,7 +44,7 @@
       --secret-file {{ forgejo_runner_secret_path }}
       --name {{ forgejo_runner_name }}
       --keep-labels
-  delegate_to: "{{ forgejo_runner_server_host }}"
+  delegate_to: "{{ git_server_host }}"
   become_user: "{{ forgejo_runner_server_user }}"
   environment:
     GITEA_WORK_DIR: "{{ forgejo_runner_server_home }}"
@@ -56,7 +56,7 @@
 - name: Read the shared secret
   ansible.builtin.slurp:
     src: "{{ forgejo_runner_secret_path }}"
-  delegate_to: "{{ forgejo_runner_server_host }}"
+  delegate_to: "{{ git_server_host }}"
   register: forgejo_runner_secret_raw
   no_log: true
 
