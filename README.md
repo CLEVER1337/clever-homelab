@@ -110,33 +110,6 @@ reviewed, and the runner must hold the docker socket to do its job — which is
 root on whatever box it sits on. That box must not be the one holding the git
 data.
 
-Registration is offline and needs no clicking: `make configure` generates a
-40-character secret on the Forgejo guest (`/etc/forgejo/runner_secret`),
-registers it there with `forgejo-cli actions register`, and writes the same
-secret on the runner as a systemd credential. Both the command and the whole
-role are idempotent, so re-running `make configure` never produces a second
-runner. Rebuilding `runner-vm` alone re-uses the existing registration; deleting
-that secret file is what creates a new one.
-
-Two details the guests' network forces:
-
-- **No DNS.** libvirt's dnsmasq hands out no leases, so it knows no names. The
-  runner gets `git.homelab.lan` in `/etc/hosts`, and job containers get it via
-  `--add-host` — they clone from the name in the certificate, not an address.
-- **A private CA.** Caddy signs that name itself, so the runner installs
-  Caddy's root into its trust store and bind-mounts `/etc/ssl/certs` into every
-  job container.
-
-What a workflow may say in `runs-on:` is set by `forgejo_runner_labels` in
-`ansible/inventory/group_vars/runners.yml` — `docker`, `ubuntu-latest` and
-`debian-trixie` today, all of them images from `data.forgejo.org`. There is
-deliberately no `host` label: a job with one would run on the VM itself instead
-of in a container.
-
-Two jobs run at once (`forgejo_runner_capacity`), each with a one-hour ceiling.
-The layer cache is pruned every Sunday — on a 10 GB disk that timer is
-load-bearing, not hygiene.
-
 When a job stays queued, the runner is the place to look:
 
 ```bash
