@@ -41,12 +41,25 @@ forgejo_db_user: forgejo
 forgejo_ci_user: ci
 forgejo_ci_email: ci@homelab.lan
 
-# Two tokens rather than one, and the pull token is what ends up on the k3s
-# nodes: a leaked kubelet credential should not be able to overwrite the image
-# it pulled. Names have to stay unique — Forgejo refuses a second token of the
-# same name, so renaming one here means deleting the old token in the web UI.
+# Three tokens rather than one, split by what each is allowed to do, because
+# each ends up somewhere different. The pull token lands on the k3s nodes: a
+# leaked kubelet credential should not be able to overwrite the image it pulled.
+#
+# Names have to stay unique — Forgejo refuses a second token of the same name,
+# so renaming one here means deleting the old token in the web UI first.
 forgejo_ci_push_token_name: ci-registry-push
 forgejo_ci_pull_token_name: k3s-registry-pull
+
+# The third one is for git, not for packages. An application's release workflow
+# builds an image and then writes the new tag into the manifests repository —
+# that commit is what deploys, so this token is the hinge of the whole pipeline.
+#
+# `write:repository` is broad: it covers every repository this account can
+# already see. What keeps it narrow is the account, not the scope — `ci` is a
+# non-admin user with no access to anything until it is added as a collaborator,
+# and the only repository it should ever be added to is the manifests one. That
+# step is manual; the README says so.
+forgejo_ci_repo_token_name: ci-manifests-write
 
 # --- TLS ----------------------------------------------------------------------
 # `internal` = Caddy's own CA. No public DNS needed, works entirely offline, but

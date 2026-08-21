@@ -65,6 +65,7 @@
   loop:
     - ci_push_token
     - ci_pull_token
+    - ci_repo_token
 
 - name: Generate the CI tokens
   ansible.builtin.command:
@@ -87,6 +88,10 @@
     - { file: ci_push_token, name: "{{ forgejo_ci_push_token_name }}", scopes: "write:package" }
     # read:package, and it ends up on every k3s node as an imagePullSecret.
     - { file: ci_pull_token, name: "{{ forgejo_ci_pull_token_name }}", scopes: "read:package" }
+    # write:repository, so a release workflow can commit the new image tag into
+    # the manifests repository. Scoped by what `ci` can reach, not by the token:
+    # add the account as a collaborator on that one repository and nothing else.
+    - { file: ci_repo_token, name: "{{ forgejo_ci_repo_token_name }}", scopes: "write:repository" }
   loop_control:
     label: "{{ item.name }}"
 
@@ -108,7 +113,11 @@
     msg:
       - "CI account `{{ forgejo_ci_user }}` created. Images belong to it:"
       - "  {{ forgejo_domain }}/{{ forgejo_ci_user }}/<image>:<tag>"
-      - "Its password and both tokens are in {{ forgejo_config_dir }} on the Forgejo VM."
-      - "Add the push token to Forgejo as a secret (Settings -> Actions -> Secrets),"
-      - "and see the README for the workflow that uses it."
+      - "Its password and all three tokens are in {{ forgejo_config_dir }} on the Forgejo VM."
+      - "Two of them go into Forgejo as Actions secrets (Settings -> Secrets):"
+      - "  REGISTRY_TOKEN  <- ci_push_token   (release workflow, every app repository)"
+      - "  MANIFESTS_TOKEN <- ci_repo_token   (release workflow, every app repository)"
+      - "The third, ci_pull_token, is fetched by the k3s play — nothing to do by hand."
+      - "One manual step: add `{{ forgejo_ci_user }}` as a collaborator with write access"
+      - "on the manifests repository, and on no other. That is what bounds MANIFESTS_TOKEN."
   when: forgejo_ci_user not in forgejo_existing_users

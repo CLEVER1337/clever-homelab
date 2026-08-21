@@ -71,6 +71,22 @@ k3s_deploy_kubeconfig_local: "{{ inventory_dir }}/.kubeconfig-deploy"
 # registry token created by the forgejo role.
 k3s_registry_secret: forgejo-registry
 
+# --- the application's credentials --------------------------------------------
+# Six Secrets in the namespace above, written by tasks/app_secrets.yml. Three of
+# the passwords are read off the database guests; three belong to the
+# application — Redis, the JWT signing key, Grafana's admin — and are generated
+# on this node, once, and kept here.
+#
+# The reason this is Ansible's job and not the manifests repository's is what it
+# keeps out of CI. The deploy pipeline ends up holding the namespace-scoped
+# kubeconfig and nothing else: no database password ever reaches the runner,
+# which is the guest that by design executes whatever a workflow file says.
+k3s_app_secret_dir: /etc/homelab
+
+# Seeds Grafana's initial admin, and only on an empty Grafana database. After
+# the first start the password lives in Grafana's own volume.
+k3s_app_grafana_user: admin
+
 # containerd caches the system trust store like every other Go process, so a new
 # Caddy root means restarting whichever half of k3s runs on this node. Neither
 # unit exists on a first run; the role that installs it starts it afterwards.

@@ -81,6 +81,10 @@
 - name: Set up what CI needs on the cluster
   ansible.builtin.import_tasks: ci_access.yml
 
+# After ci_access: that is what creates the namespace these land in.
+- name: Put the application's credentials in its namespace
+  ansible.builtin.import_tasks: app_secrets.yml
+
 - name: Report how to reach the cluster
   ansible.builtin.debug:
     msg:
