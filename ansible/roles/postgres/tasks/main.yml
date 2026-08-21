@@ -70,47 +70,53 @@
   become_user: postgres
   no_log: true
 
-- name: Create the application database
+- name: Create the application databases
   community.postgresql.postgresql_db:
-    name: "{{ pg_app_db }}"
+    name: "{{ item }}"
     owner: "{{ pg_app_user }}"
     encoding: UTF-8
     state: present
   become_user: postgres
+  loop: "{{ pg_app_databases }}"
 
 # Postgres 15 stopped granting CREATE on the public schema to everyone. Without
 # this the role owns the database but cannot create a table in it, which
 # surfaces as a permission error on the application's very first migration.
 - name: Give the application role its schema
   community.postgresql.postgresql_privs:
-    db: "{{ pg_app_db }}"
+    db: "{{ item }}"
     type: schema
     objs: public
     roles: "{{ pg_app_user }}"
     privs: ALL
     state: present
   become_user: postgres
+  loop: "{{ pg_app_databases }}"
 
 # Managed as entries rather than by templating pg_hba.conf, so the distro file
 # and its local/peer rules stay intact — replacing it is how you lock yourself
 # out of `sudo -u postgres psql`.
+#
+# One rule per database per network, rather than one rule per network with
+# `all` for the database. That is the whole point of listing them: this account
+# reaches these four and nothing that gets created here later.
 - name: Allow the application in from the guest and pod networks
   community.postgresql.postgresql_pg_hba:
     dest: "/etc/postgresql/{{ pg_version }}/main/pg_hba.conf"
     contype: host
-    databases: "{{ pg_app_db }}"
+    databases: "{{ item.0 }}"
     users: "{{ pg_app_user }}"
-    source: "{{ item }}"
+    source: "{{ item.1 }}"
     method: scram-sha-256
     state: present
-  loop: "{{ db_allowed_networks }}"
+  loop: "{{ pg_app_databases | product(db_allowed_networks) | list }}"
   notify: Reload postgresql
 
 - name: Report the application credentials
   ansible.builtin.debug:
     msg:
       - "PostgreSQL ready on {{ ansible_host }}:5432"
-      - "  database: {{ pg_app_db }}   user: {{ pg_app_user }}"
+      - "  databases: {{ pg_app_databases | join(', ') }}   user: {{ pg_app_user }}"
       - "  password: {{ pg_app_password }}"
       - "Kept at {{ db_secret_dir }}/pg_{{ pg_app_user }}_password on the VM."
   when: pg_password_created is changed

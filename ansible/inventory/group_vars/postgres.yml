@@ -7,9 +7,27 @@
 # directory path contains it and an unattended major upgrade does not migrate.
 pg_version: 17
 
-# Rename these to whatever the application expects before the first run: the
-# database is created once and this role will not rename it afterwards.
-pg_app_db: app
+# One server, several databases. explAIned is a set of microservices and each
+# owns its own schema — sharing one would be the thing its architecture is built
+# to avoid — but they share a server, because four Postgres instances on a 3 GB
+# guest buys an isolation nobody asked for at a price this machine cannot pay.
+#
+# Named for the services that use them: identity, article, comment, profile.
+# `asd` is identity's and is spelled that way in the application's connection
+# string; renaming it here without renaming it there breaks the login path.
+#
+# Set these before the first run. A database is created once and this role will
+# not rename one afterwards — adding an entry later is fine and creates only the
+# new one.
+pg_app_databases:
+  - asd
+  - articles
+  - comments
+  - profiles
+
+# A single owner for all four. The services never connect to each other's
+# databases, so per-database roles would add key management without adding a
+# boundary anything actually crosses.
 pg_app_user: app
 
 # --- tuning for a 3 GB machine ------------------------------------------------

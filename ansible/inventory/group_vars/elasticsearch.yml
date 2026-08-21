@@ -24,7 +24,15 @@ elasticsearch_config_dir: /etc/elasticsearch
 elasticsearch_app_user: app
 # Indices the application account may touch. Everything else, including the
 # security indices, stays out of reach.
-elasticsearch_index_pattern: "app-*"
+#
+# `articles*`, because that is the index the application actually writes:
+# `IndexName` is a const in ElasticsearchIndexerHostedService.cs, not a setting.
+# Under the old `app-*` every index call comes back 403, and the failure is
+# quiet in a way worth knowing about — the ES indexer commits its Kafka offset
+# only on success, so it does not lose data, it stops. Consumer-group lag on
+# `articles.events` climbs and search results simply stay as old as the last
+# thing that got through.
+elasticsearch_index_pattern: "articles*"
 
 # The image runs Elasticsearch as this uid, and a bind-mounted data directory
 # has to be owned by it or the node fails to start with a permissions error.

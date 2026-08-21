@@ -78,4 +78,20 @@ caddy_acme_email: ""
 #
 # Nothing resolves these names on its own: add them to /etc/hosts on the
 # workstation pointing at the hypervisor, same as git.homelab.lan.
-caddy_k3s_apps: []
+caddy_k3s_apps:
+  # explAIned. One name for the whole API, not one per service: the five public
+  # services own disjoint top-level paths (/user, /session, /articles,
+  # /comments, /profiles, /api/feed) and an nginx gateway pod in the cluster
+  # routes between them. That keeps a single origin for the frontend, which is
+  # one base URL and no CORS, and keeps this list from growing a line every time
+  # a service is added.
+  #
+  # /healthz is answered by the gateway itself rather than proxied to a backend
+  # — the question Caddy is asking is whether this node can route at all.
+  - domain: explained.homelab.lan
+    node_port: 30080
+    health_uri: /healthz
+
+  - domain: grafana.explained.homelab.lan
+    node_port: 30300
+    health_uri: /api/health

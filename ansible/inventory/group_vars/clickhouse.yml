@@ -4,7 +4,12 @@
 # install on a fresh machine, and is recorded so a rebuild is reproducible.
 clickhouse_version: "26.7.4.58"
 
-clickhouse_app_db: app
+# Lowercase `explained`, and it is not a free choice. ClickHouse identifiers are
+# case-sensitive, and the application's schema.sql writes `explained.user_events`
+# and `explained.feed_impressions` with the name spelled into every statement.
+# Anything else here creates a database the application never writes to, while
+# its inserts fail against tables that do not exist.
+clickhouse_app_db: explained
 clickhouse_app_user: app
 
 # --- memory -------------------------------------------------------------------
