@@ -12,15 +12,17 @@ pg_version: 17
 # to avoid — but they share a server, because four Postgres instances on a 3 GB
 # guest buys an isolation nobody asked for at a price this machine cannot pay.
 #
-# Named for the services that use them: identity, article, comment, profile.
-# `asd` is identity's and is spelled that way in the application's connection
-# string; renaming it here without renaming it there breaks the login path.
+# Named for what each service stores: identity's accounts, articles, comments,
+# profiles. These have to match the `Database=` in each service's connection
+# string exactly — nothing discovers them.
 #
 # Set these before the first run. A database is created once and this role will
-# not rename one afterwards — adding an entry later is fine and creates only the
-# new one.
+# not rename one afterwards. Adding an entry later is fine and creates only the
+# new one; *changing* an entry creates an empty database under the new name and
+# leaves the old one sitting there with all the data still in it. Renaming is a
+# manual ALTER DATABASE against the running server, and only then an edit here.
 pg_app_databases:
-  - asd
+  - users
   - articles
   - comments
   - profiles
