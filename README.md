@@ -1,8 +1,9 @@
 # clever-homelab
 
 Terraform builds VMs on a bare-metal Debian/KVM host, Ansible configures them.
-Guests: Forgejo behind Caddy at `git.homelab.lan`, PostgreSQL, ClickHouse,
-Elasticsearch, and a k3s cluster (one server, two agents).
+Guests: Forgejo behind Caddy at `git.homelab.lan`, its Actions runner,
+PostgreSQL, ClickHouse, Elasticsearch, and a k3s cluster (one server, two
+agents).
 
 ## Infrastructure
 
@@ -17,7 +18,7 @@ flowchart TB
     subgraph HOST["bare-metal Debian · libvirt/KVM"]
         subgraph POOL1["pool <b>homelab</b> — host root filesystem"]
             FORGEJO["<b>forgejo-vm</b> · 10.42.0.10<br/>Caddy → Forgejo + its own Postgres<br/>2 / 4G / 25G"]
-            RUNNER["<b>runner-vm</b> · 10.42.0.11<br/>Actions runner — planned, no role yet<br/>4 / 4G / 10G"]
+            RUNNER["<b>runner-vm</b> · 10.42.0.11<br/>Forgejo Actions runner · Docker<br/>4 / 4G / 10G"]
 
             subgraph K3S["k3s · pods on 10.44.0.0/16"]
                 MASTER["<b>k3s-master</b> · .30<br/>server, SQLite, tainted<br/>2 / 2.5G / 8G"]
@@ -76,7 +77,7 @@ All wrapped in makefile so you can easily launch it.
 | `make bootstrap` | bare Debian -> KVM hypervisor: pools, network, firewall, clock |
 | `make plan` | preview what Terraform would change |
 | `make apply` | create/update the VMs |
-| `make configure` | run `site.yml`: Forgejo + Caddy, the databases, k3s |
+| `make configure` | run `site.yml`: Forgejo + Caddy, the Actions runner, the databases, k3s |
 | `make all` | `bootstrap` + `apply` + `configure` |
 | `make status` | disk usage and systemd health on every machine |
 | `make ssh` | shell into the Forgejo VM |
@@ -100,6 +101,50 @@ make configure
 Run `make bootstrap` before `make apply` — Terraform expects the pools and
 network it creates. Open a new SSH session in between: bootstrap adds you to the
 `libvirt` group, and the provider needs a login that already has it.
+
+## CI: the Actions runner
+
+`runner-vm` runs Forgejo Actions jobs, each one in a Docker container on that
+guest. It has a machine of its own because a workflow file is code nobody
+reviewed, and the runner must hold the docker socket to do its job — which is
+root on whatever box it sits on. That box must not be the one holding the git
+data.
+
+Registration is offline and needs no clicking: `make configure` generates a
+40-character secret on the Forgejo guest (`/etc/forgejo/runner_secret`),
+registers it there with `forgejo-cli actions register`, and writes the same
+secret on the runner as a systemd credential. Both the command and the whole
+role are idempotent, so re-running `make configure` never produces a second
+runner. Rebuilding `runner-vm` alone re-uses the existing registration; deleting
+that secret file is what creates a new one.
+
+Two details the guests' network forces:
+
+- **No DNS.** libvirt's dnsmasq hands out no leases, so it knows no names. The
+  runner gets `git.homelab.lan` in `/etc/hosts`, and job containers get it via
+  `--add-host` — they clone from the name in the certificate, not an address.
+- **A private CA.** Caddy signs that name itself, so the runner installs
+  Caddy's root into its trust store and bind-mounts `/etc/ssl/certs` into every
+  job container.
+
+What a workflow may say in `runs-on:` is set by `forgejo_runner_labels` in
+`ansible/inventory/group_vars/runners.yml` — `docker`, `ubuntu-latest` and
+`debian-trixie` today, all of them images from `data.forgejo.org`. There is
+deliberately no `host` label: a job with one would run on the VM itself instead
+of in a container.
+
+Two jobs run at once (`forgejo_runner_capacity`), each with a one-hour ceiling.
+The layer cache is pruned every Sunday — on a 10 GB disk that timer is
+load-bearing, not hygiene.
+
+When a job stays queued, the runner is the place to look:
+
+```bash
+ssh -J supervisor@<host> supervisor@10.42.0.11 'journalctl -u forgejo-runner -f'
+```
+
+An unreachable instance, a rejected token or an image it cannot pull all leave
+the unit `active` and looping — the journal is the only place they show.
 
 ## Second storage volume
 

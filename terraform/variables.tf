@@ -114,7 +114,7 @@ variable "vms" {
 
     # Forgejo Actions runner. It gets a machine of its own rather than a slot on
     # the Forgejo VM because it executes whatever is in a repository's workflow
-    # file: `act_runner` needs the docker socket, which is root on the box it
+    # file: `forgejo-runner` needs the docker socket, which is root on the box it
     # runs on, and that must not be the box holding the git data and the
     # database behind it.
     #
