@@ -81,31 +81,35 @@ forgejo_runner_labels:
   - ubuntu-latest:docker://data.forgejo.org/oci/node:22-bookworm
   - debian-trixie:docker://data.forgejo.org/oci/debian:trixie
 
-# --- where the Forgejo instance is --------------------------------------------
-# The runner registers itself by running Forgejo's own CLI on the git guest,
-# through `delegate_to`. Delegation runs the task over there but keeps *this*
-# host's variables, so everything belonging to the forgejo group has to be
-# reached through hostvars explicitly — hence the five lines below rather than
-# using forgejo_bin and friends directly.
-forgejo_runner_server_host: "{{ groups['forgejo'][0] }}"
-forgejo_runner_server_ip: "{{ hostvars[forgejo_runner_server_host].ansible_host }}"
-forgejo_runner_server_bin: "{{ hostvars[forgejo_runner_server_host].forgejo_bin }}"
-forgejo_runner_server_config: "{{ hostvars[forgejo_runner_server_host].forgejo_config_dir }}/app.ini"
-forgejo_runner_server_user: "{{ hostvars[forgejo_runner_server_host].forgejo_user }}"
-forgejo_runner_server_home: "{{ hostvars[forgejo_runner_server_host].forgejo_home }}"
-forgejo_runner_domain: "{{ hostvars[forgejo_runner_server_host].forgejo_domain }}"
+# Whether a job container is given the docker socket. `automount` mounts it at
+# /var/run/docker.sock inside the job, which is what makes `docker build` and a
+# push to Forgejo's registry possible at all — and, in the same breath, hands
+# root on this guest to whatever the workflow runs.
+#
+# That trade is deliberate and it is the reason this VM exists, holds nothing
+# but a layer cache, and is not the machine with the git data on it. Set this to
+# "-" to take the capability away; images then have to be built by something
+# that needs no daemon, such as kaniko or buildah.
+forgejo_runner_docker_host: automount
 
-forgejo_runner_instance_url: "https://{{ forgejo_runner_domain }}"
+# --- where the Forgejo instance is --------------------------------------------
+# Its address, name and CA are in group_vars/all.yml as git_server_* — the k3s
+# nodes need the same three. What is left here is what only the runner uses: the
+# CLI it invokes over `delegate_to` to register itself.
+forgejo_runner_server_bin: "{{ hostvars[git_server_host].forgejo_bin }}"
+forgejo_runner_server_config: "{{ git_server_config_dir }}/app.ini"
+forgejo_runner_server_user: "{{ hostvars[git_server_host].forgejo_user }}"
+forgejo_runner_server_home: "{{ hostvars[git_server_host].forgejo_home }}"
+
+forgejo_runner_instance_url: "https://{{ git_server_domain }}"
 
 # The shared secret both sides register with. Lives on the git guest next to
 # Forgejo's other secrets, generated once and never rotated by a re-run — same
 # rule as every other password in this repository.
-forgejo_runner_secret_path: "{{ hostvars[forgejo_runner_server_host].forgejo_config_dir }}/runner_secret"
+forgejo_runner_secret_path: "{{ git_server_config_dir }}/runner_secret"
 
-# --- trusting the git server's certificate ------------------------------------
-# Caddy signs git.homelab.lan with its own CA (`caddy_tls_mode: internal`), so
-# the runner has to be told about that root or every clone fails on an unknown
-# authority. This is where Caddy keeps it when it runs as the Debian package's
-# systemd unit; if TLS is ever moved to acme this whole step drops out.
-forgejo_runner_ca_src: /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
-forgejo_runner_ca_dest: /usr/local/share/ca-certificates/homelab-caddy.crt
+# The runner's own HTTP client and the docker daemon both cache the system trust
+# store, so both are restarted when Caddy's root changes underneath them.
+forgejo_access_reload_services:
+  - docker
+  - forgejo-runner

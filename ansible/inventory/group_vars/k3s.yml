@@ -46,3 +46,34 @@ k3s_prune_schedule: "Sun *-*-* 04:00:00"
 # Where the fetched cluster credentials land on the machine running Ansible.
 # Gitignored — this file is full cluster-admin.
 k3s_kubeconfig_local: "{{ inventory_dir }}/.kubeconfig"
+
+# --- what CI is allowed to do -------------------------------------------------
+# The cluster half of the CI story: a namespace for the project, an account that
+# may deploy into it and nothing else, and the credential for pulling images out
+# of Forgejo's registry. The manifests that describe the application itself
+# belong in the application's repository — this is only the door they come
+# through.
+k3s_app_namespace: apps
+
+# Namespace-scoped, deliberately. A workflow holding this account can replace a
+# Deployment in `apps`; it cannot touch kube-system, read a Secret in another
+# namespace, or create the cluster role that would let it.
+k3s_deploy_account: deployer
+
+# The kubeconfig built for that account. Gitignored, and unlike .kubeconfig it
+# is meant to be pasted into Forgejo as a repository or organisation secret —
+# it points at the API server's guest address, which is reachable from the CI
+# runner but not from the workstation.
+k3s_deploy_kubeconfig_local: "{{ inventory_dir }}/.kubeconfig-deploy"
+
+# imagePullSecret in the application namespace, attached to its `default`
+# ServiceAccount so a pod does not have to name it. Holds the read-only
+# registry token created by the forgejo role.
+k3s_registry_secret: forgejo-registry
+
+# containerd caches the system trust store like every other Go process, so a new
+# Caddy root means restarting whichever half of k3s runs on this node. Neither
+# unit exists on a first run; the role that installs it starts it afterwards.
+forgejo_access_reload_services:
+  - k3s
+  - k3s-agent

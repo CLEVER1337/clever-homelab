@@ -78,6 +78,9 @@
   become: false
   no_log: true
 
+- name: Set up what CI needs on the cluster
+  ansible.builtin.import_tasks: ci_access.yml
+
 - name: Report how to reach the cluster
   ansible.builtin.debug:
     msg:

@@ -28,9 +28,54 @@ forgejo_require_signin_view: false
 forgejo_db_name: forgejo
 forgejo_db_user: forgejo
 
+# --- the CI account -----------------------------------------------------------
+# A second, non-admin account that exists for workflows: it owns the container
+# images CI builds and holds the tokens that push and pull them. Not the admin
+# account, because a token belonging to `clever` would carry every permission
+# that account has into every job that runs.
+#
+# Images therefore live under this user's namespace —
+# git.homelab.lan/{{ forgejo_ci_user }}/<image> — which is also the only
+# namespace the push token can write to. Forgejo scopes packages to their owner,
+# not to a repository.
+forgejo_ci_user: ci
+forgejo_ci_email: ci@homelab.lan
+
+# Two tokens rather than one, and the pull token is what ends up on the k3s
+# nodes: a leaked kubelet credential should not be able to overwrite the image
+# it pulled. Names have to stay unique — Forgejo refuses a second token of the
+# same name, so renaming one here means deleting the old token in the web UI.
+forgejo_ci_push_token_name: ci-registry-push
+forgejo_ci_pull_token_name: k3s-registry-pull
+
 # --- TLS ----------------------------------------------------------------------
 # `internal` = Caddy's own CA. No public DNS needed, works entirely offline, but
 # you must trust its root cert once per client (README explains how).
 # Switch to `acme` only if forgejo_domain is a real domain that resolves publicly.
 caddy_tls_mode: internal
 caddy_acme_email: ""
+
+# --- publishing what runs on k3s ----------------------------------------------
+# Ports 80 and 443 on the hypervisor are DNAT'd to this guest, so this Caddy is
+# the only process on the homelab that can answer for a name from the LAN. An
+# application on the cluster is published by adding an entry here: Caddy
+# terminates TLS and proxies to a NodePort on every k3s agent.
+#
+# A NodePort rather than an in-cluster ingress because there is nothing for an
+# ingress controller to claim — see the traefik note in group_vars/k3s.yml. k3s
+# opens a NodePort on every node regardless of where the pods actually are, so
+# listing both agents here is load balancing and failover in one.
+#
+# What this repo owns is the address; the Service that answers on `node_port`
+# belongs in the application's own repository. `health_uri` is optional — when
+# it is set, Caddy stops sending traffic to a node whose pods are gone rather
+# than returning its 502 to the browser.
+#
+# caddy_k3s_apps:
+#   - domain: app.homelab.lan
+#     node_port: 30080
+#     health_uri: /healthz
+#
+# Nothing resolves these names on its own: add them to /etc/hosts on the
+# workstation pointing at the hypervisor, same as git.homelab.lan.
+caddy_k3s_apps: []

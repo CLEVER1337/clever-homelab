@@ -1,0 +1,114 @@
+---
+# The account workflows act as. It owns the container images CI builds and the
+# two tokens that move them: one for the runner to push with, one for the k3s
+# nodes to pull with. Keeping it separate from the admin account is the whole
+# point — a token belonging to `clever` in a job's environment would carry admin
+# over the instance into code nobody reviewed.
+
+- name: List the accounts that exist
+  ansible.builtin.command:
+    cmd: "{{ forgejo_bin }} admin user list --config {{ forgejo_config_dir }}/app.ini"
+  become_user: "{{ forgejo_user }}"
+  environment:
+    GITEA_WORK_DIR: "{{ forgejo_home }}"
+  register: forgejo_user_list
+  changed_when: false
+
+# Columns are `ID Username Email IsActive IsAdmin 2FA`, with a header row.
+- name: Note which accounts those are
+  ansible.builtin.set_fact:
+    forgejo_existing_users: >-
+      {{ forgejo_user_list.stdout_lines[1:]
+         | map('regex_replace', '^\s*\d+\s+(\S+).*$', '\1') | list }}
+
+- name: Generate the CI account's password once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      openssl rand -base64 24 | tr -d '\n' > {{ forgejo_config_dir }}/ci_password
+      && chmod 0600 {{ forgejo_config_dir }}/ci_password
+    creates: "{{ forgejo_config_dir }}/ci_password"
+    executable: /bin/bash
+
+- name: Read the CI account's password
+  ansible.builtin.slurp:
+    src: "{{ forgejo_config_dir }}/ci_password"
+  register: forgejo_ci_password_raw
+  no_log: true
+
+# The password is barely used — the tokens below are what CI authenticates
+# with — but the account needs one, and having it lets you log into the web UI
+# as this user to see what it can actually reach.
+- name: Create the CI account
+  ansible.builtin.command:
+    cmd: >-
+      {{ forgejo_bin }} admin user create
+      --username {{ forgejo_ci_user }}
+      --email {{ forgejo_ci_email }}
+      --password {{ (forgejo_ci_password_raw.content | b64decode) | quote }}
+      --must-change-password=false
+      --config {{ forgejo_config_dir }}/app.ini
+  become_user: "{{ forgejo_user }}"
+  environment:
+    GITEA_WORK_DIR: "{{ forgejo_home }}"
+  when: forgejo_ci_user not in forgejo_existing_users
+  no_log: true
+
+# Forgejo refuses to mint a second token under a name it has already used, so
+# these are guarded by the file they land in rather than by `creates:` — the
+# command has no idea whether the copy on disk still exists. If a token file is
+# ever lost, delete the token in the web UI before running this again.
+- name: Check which CI tokens are already stored
+  ansible.builtin.stat:
+    path: "{{ forgejo_config_dir }}/{{ item }}"
+  register: forgejo_ci_token_files
+  loop:
+    - ci_push_token
+    - ci_pull_token
+
+- name: Generate the CI tokens
+  ansible.builtin.command:
+    cmd: >-
+      {{ forgejo_bin }} admin user generate-access-token
+      --username {{ forgejo_ci_user }}
+      --token-name {{ item.name }}
+      --scopes {{ item.scopes }}
+      --raw
+      --config {{ forgejo_config_dir }}/app.ini
+  become_user: "{{ forgejo_user }}"
+  environment:
+    GITEA_WORK_DIR: "{{ forgejo_home }}"
+  when: not (forgejo_ci_token_files.results | selectattr('item', 'equalto', item.file) | first).stat.exists
+  register: forgejo_ci_tokens
+  no_log: true
+  loop:
+    # write:package and nothing else: this token lives in the runner's
+    # environment, so it must not be able to touch code or issues.
+    - { file: ci_push_token, name: "{{ forgejo_ci_push_token_name }}", scopes: "write:package" }
+    # read:package, and it ends up on every k3s node as an imagePullSecret.
+    - { file: ci_pull_token, name: "{{ forgejo_ci_pull_token_name }}", scopes: "read:package" }
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Store the CI tokens
+  ansible.builtin.copy:
+    content: "{{ item.stdout | trim }}"
+    dest: "{{ forgejo_config_dir }}/{{ item.item.file }}"
+    owner: root
+    group: root
+    mode: "0600"
+  when: item is not skipped
+  loop: "{{ forgejo_ci_tokens.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  no_log: true
+
+- name: Report the CI account
+  ansible.builtin.debug:
+    msg:
+      - "CI account `{{ forgejo_ci_user }}` created. Images belong to it:"
+      - "  {{ forgejo_domain }}/{{ forgejo_ci_user }}/<image>:<tag>"
+      - "Its password and both tokens are in {{ forgejo_config_dir }} on the Forgejo VM."
+      - "Add the push token to Forgejo as a secret (Settings -> Actions -> Secrets),"
+      - "and see the README for the workflow that uses it."
+  when: forgejo_ci_user not in forgejo_existing_users

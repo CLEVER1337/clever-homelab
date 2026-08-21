@@ -115,3 +115,6 @@
 
 - name: Set up the admin account
   ansible.builtin.import_tasks: admin.yml
+
+- name: Set up the account CI acts as
+  ansible.builtin.import_tasks: ci.yml

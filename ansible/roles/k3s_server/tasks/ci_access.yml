@@ -1,0 +1,105 @@
+---
+# The cluster's half of CI: a namespace for the project, an account that may
+# deploy into it, and the credential every node uses to pull images out of
+# Forgejo's registry.
+#
+# Everything here runs through `k3s kubectl` rather than the kubernetes.core
+# modules — that collection is not in requirements.yml, and installing it means
+# reaching a Galaxy this network does not always answer for.
+
+# Created by the forgejo role, on the other guest. Missing means that play has
+# not run yet, which is normal on a homelab built one machine at a time — the
+# cluster is still usable, it just cannot pull private images until it has.
+- name: Look for the registry pull token
+  ansible.builtin.stat:
+    path: "{{ git_server_config_dir }}/ci_pull_token"
+  delegate_to: "{{ git_server_host }}"
+  register: k3s_registry_token_file
+
+- name: Read the registry pull token
+  ansible.builtin.slurp:
+    src: "{{ git_server_config_dir }}/ci_pull_token"
+  delegate_to: "{{ git_server_host }}"
+  register: k3s_registry_token_raw
+  when: k3s_registry_token_file.stat.exists
+  no_log: true
+
+- name: Note the registry credentials
+  ansible.builtin.set_fact:
+    k3s_registry_user: "{{ hostvars[git_server_host].forgejo_ci_user }}"
+    k3s_registry_token: >-
+      {{ (k3s_registry_token_raw.content | b64decode | trim)
+         if k3s_registry_token_file.stat.exists else '' }}
+  no_log: true
+
+- name: Write the CI access manifests
+  ansible.builtin.template:
+    src: ci-access.yaml.j2
+    dest: /etc/rancher/k3s/ci-access.yaml
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+# `apply` rather than `create`: this runs on every `make configure`, and the
+# only thing that should change is what the file above says.
+- name: Apply them
+  ansible.builtin.command: /usr/local/bin/k3s kubectl apply -f /etc/rancher/k3s/ci-access.yaml
+  register: k3s_ci_access_applied
+  changed_when: >-
+    k3s_ci_access_applied.stdout_lines | reject('search', 'unchanged$') | list | length > 0
+
+# Filled in by the token controller a moment after the Secret appears, so the
+# first run gets here before it exists.
+- name: Wait for the deploy account's token
+  ansible.builtin.command: >-
+    /usr/local/bin/k3s kubectl -n {{ k3s_app_namespace }}
+    get secret {{ k3s_deploy_account }}-token -o jsonpath={.data.token}
+  register: k3s_deploy_token_raw
+  until: k3s_deploy_token_raw.stdout | length > 0
+  retries: 12
+  delay: 5
+  changed_when: false
+  no_log: true
+
+# So a pod does not have to name the pull secret itself. Anything that runs in
+# this namespace under the default account gets it — which is every workload
+# whose manifest does not say otherwise.
+- name: Attach the pull secret to the namespace's default account
+  ansible.builtin.command: >-
+    /usr/local/bin/k3s kubectl -n {{ k3s_app_namespace }} patch serviceaccount default
+    -p {{ {'imagePullSecrets': [{'name': k3s_registry_secret}]} | to_json | quote }}
+  register: k3s_default_sa_patched
+  changed_when: "'(no change)' not in k3s_default_sa_patched.stdout"
+  when: k3s_registry_token_file.stat.exists
+
+- name: Note the credentials the kubeconfig needs
+  ansible.builtin.set_fact:
+    k3s_deploy_token: "{{ k3s_deploy_token_raw.stdout | b64decode }}"
+    # The same CA the admin kubeconfig carries — read from the copy this role
+    # already slurped rather than from the PKI directory, where picking the
+    # wrong one of several files is easy and only shows up as a TLS error.
+    k3s_cluster_ca: >-
+      {{ (k3s_kubeconfig_raw.content | b64decode | from_yaml).clusters[0].cluster['certificate-authority-data'] }}
+  no_log: true
+
+- name: Save the deploy kubeconfig next to the inventory
+  ansible.builtin.template:
+    src: deploy-kubeconfig.yaml.j2
+    dest: "{{ k3s_deploy_kubeconfig_local }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  no_log: true
+
+- name: Report how CI reaches the cluster
+  ansible.builtin.debug:
+    msg:
+      - "namespace {{ k3s_app_namespace }}, deploy account {{ k3s_deploy_account }} (that namespace only)"
+      - "kubeconfig for CI: {{ k3s_deploy_kubeconfig_local }} — gitignored"
+      - "  add it to Forgejo as the secret KUBE_CONFIG; the README has the workflow"
+      - >-
+        {{ 'pull secret ' ~ k3s_registry_secret ~ ' is on the default account — pods pull from '
+           ~ git_server_domain ~ ' without naming it'
+           if k3s_registry_token_file.stat.exists
+           else 'no registry pull secret: the forgejo play has not created the CI token yet' }}

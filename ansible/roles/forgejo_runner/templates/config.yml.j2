@@ -48,9 +48,10 @@ container:
   # Docker-in-Docker would need this. Nothing here should — a job that can run
   # privileged containers can leave the container.
   privileged: false
-  # No docker socket inside the job container: the runner needs it, the code it
-  # runs does not.
-  docker_host: "-"
+  # See the comment on this variable in group_vars/runners.yml — `automount` is
+  # what lets a workflow build and push an image, and it is also the line that
+  # gives workflow code root on this guest.
+  docker_host: "{{ forgejo_runner_docker_host }}"
   # One line, passed to `docker create`:
   #
   #   --add-host      the guests have no DNS, and the job clones from the name
@@ -60,15 +61,20 @@ container:
   #   NODE_EXTRA_CA_CERTS  node ships its own CA list and ignores the system
   #                   one, and every action written in JavaScript runs on it.
   options: >-
-    --add-host={{ forgejo_runner_domain }}:{{ forgejo_runner_server_ip }}
+    --add-host={{ git_server_domain }}:{{ git_server_ip }}
     --volume=/etc/ssl/certs:/etc/ssl/certs:ro
     --env=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
-  # Which host paths a workflow may mount. Everything not listed is refused, so
-  # a workflow cannot ask for the docker socket or for the runner's own token.
-  # The trust store is here because the mount above is checked against this
-  # list as well.
+  # Which host paths a workflow may mount. Everything not listed is refused —
+  # the runner's own token and config stay out of reach whatever the workflow
+  # asks for. The trust store is here because the mount above is checked
+  # against this list too.
   valid_volumes:
     - /etc/ssl/certs
+{% if forgejo_runner_docker_host == 'automount' %}
+    # Already mounted by `docker_host: automount`; listing it only means a
+    # workflow may name it itself, which changes nothing it could not already do.
+    - /var/run/docker.sock
+{% endif %}
 
 server:
   # Since v13 the runner is told who it is here rather than writing a `.runner`

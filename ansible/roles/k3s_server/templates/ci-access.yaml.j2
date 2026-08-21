@@ -1,0 +1,93 @@
+# {{ ansible_managed }}
+#
+# Applied with `kubectl apply`, so this file is the whole description of what CI
+# may do to the cluster: change it here, re-run `make configure`.
+#
+# It contains the registry token, which is why it is 0600 on the server and why
+# the task that writes it runs with no_log.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ k3s_app_namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ k3s_deploy_account }}
+  namespace: {{ k3s_app_namespace }}
+---
+# What a deploy actually needs: replace the workload, its config, and the
+# Service in front of it, then watch the rollout.
+#
+# Secrets are the one resource with a narrowed verb list. `get` is there because
+# `kubectl apply` reads the current object before patching it, so without it a
+# manifest directory containing a Secret fails on the first apply — but `list`
+# and `watch` are not, so this account cannot enumerate what it did not create.
+# Names in this namespace are not a secret; their contents are.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ k3s_deploy_account }}
+  namespace: {{ k3s_app_namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, configmaps, persistentvolumeclaims]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, daemonsets, replicasets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ k3s_deploy_account }}
+  namespace: {{ k3s_app_namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ k3s_deploy_account }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ k3s_deploy_account }}
+    namespace: {{ k3s_app_namespace }}
+---
+# Kubernetes stopped issuing ServiceAccount tokens on its own; a projected token
+# expires with the pod it was mounted into, which is no use to a workflow
+# running outside the cluster. A Secret of this type is still filled in by the
+# token controller and does not expire — which is the point, and the reason it
+# is scoped as narrowly as the Role above.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ k3s_deploy_account }}-token
+  namespace: {{ k3s_app_namespace }}
+  annotations:
+    kubernetes.io/service-account.name: {{ k3s_deploy_account }}
+type: kubernetes.io/service-account-token
+{% if k3s_registry_token %}
+---
+# Read-only pull credentials for git.homelab.lan. Written out rather than made
+# with `kubectl create secret docker-registry`, which would put the token in the
+# process list on this node.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ k3s_registry_secret }}
+  namespace: {{ k3s_app_namespace }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ {'auths': {git_server_domain: {'username': k3s_registry_user, 'password': k3s_registry_token, 'auth': (k3s_registry_user ~ ':' ~ k3s_registry_token) | b64encode}}} | to_json | b64encode }}
+{% endif %}

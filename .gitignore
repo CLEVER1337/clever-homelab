@@ -23,3 +23,6 @@ ansible/inventory/.known_hosts_guests
 
 # Fetched from the k3s server on every run. Cluster-admin credentials.
 ansible/inventory/.kubeconfig
+# Built on every run for CI to deploy with. Narrower than the one above — one
+# namespace, no cluster-wide rights — but still a live token.
+ansible/inventory/.kubeconfig-deploy

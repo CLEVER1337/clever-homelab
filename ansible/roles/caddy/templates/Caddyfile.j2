@@ -28,3 +28,31 @@
 		output file /var/log/caddy/access.log
 	}
 }
+{% for app in caddy_k3s_apps %}
+
+# {{ app.domain }} -> NodePort {{ app.node_port }} on every k3s agent.
+# The Service behind it lives in the application's repository, not this one.
+{{ app.domain }} {
+{% if caddy_tls_mode == 'internal' %}
+	tls internal
+{% else %}
+	tls {{ caddy_acme_email }}
+{% endif %}
+
+	reverse_proxy {% for node in groups['k3s_agents'] %}{{ hostvars[node].ansible_host }}:{{ app.node_port }} {% endfor %}{
+		lb_policy round_robin
+{% if app.health_uri is defined %}
+		# Without this a node whose pods have been rescheduled elsewhere keeps
+		# taking its share of the requests and answering 502 to each one.
+		health_uri {{ app.health_uri }}
+		health_interval 10s
+{% endif %}
+	}
+
+	encode gzip
+
+	log {
+		output file /var/log/caddy/access.log
+	}
+}
+{% endfor %}
