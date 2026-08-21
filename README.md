@@ -80,7 +80,7 @@ All wrapped in makefile so you can easily launch it.
 | `make configure` | run `site.yml`: Forgejo + Caddy, the Actions runner, the databases, k3s |
 | `make all` | `bootstrap` + `apply` + `configure` |
 | `make status` | disk usage and systemd health on every machine |
-| `make ssh` | shell into the Forgejo VM |
+| `make ssh` | shell into a guest — `make ssh VM=runner`, default `forgejo` |
 | `make lint` | `terraform fmt`/`validate` plus a playbook syntax check |
 | `make destroy` | tear down the VMs, keep the hypervisor |
 
@@ -118,6 +118,81 @@ ssh -J supervisor@<host> supervisor@10.42.0.11 'journalctl -u forgejo-runner -f'
 
 An unreachable instance, a rejected token or an image it cannot pull all leave
 the unit `active` and looping — the journal is the only place they show.
+
+## From a push to a running pod
+
+`make configure` builds the whole path; what it cannot do is write your
+workflow, which lives in the application's repository, not here.
+
+What it does create:
+
+- **`ci`**, a non-admin Forgejo account with two tokens — one that may write
+  packages, one that may only read them. Images belong to it, so they are named
+  `git.homelab.lan/ci/<image>:<tag>`; Forgejo scopes packages to their owner.
+  Both tokens and the account's password are in `/etc/forgejo` on the Forgejo VM.
+- **`apps`**, a namespace on the cluster, plus a `deployer` account that may
+  change workloads *in that namespace only*. Its kubeconfig is written to
+  `ansible/inventory/.kubeconfig-deploy` (gitignored).
+- **the pull secret**, attached to the namespace's `default` ServiceAccount, so
+  a pod pulls from `git.homelab.lan` without naming a credential.
+
+Two things are yours to do once, by hand, because they are Forgejo settings
+rather than machine state — under Settings → Actions → Secrets on the repository
+or the organisation:
+
+| secret | value |
+| --- | --- |
+| `REGISTRY_TOKEN` | contents of `/etc/forgejo/ci_push_token` on the Forgejo VM |
+| `KUBE_CONFIG` | contents of `ansible/inventory/.kubeconfig-deploy` |
+
+Then a workflow in the application's repository looks like this:
+
+```yaml
+on: { push: { branches: [main] } }
+
+jobs:
+  ship:
+    runs-on: docker
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          echo "${{ secrets.REGISTRY_TOKEN }}" |
+            docker login git.homelab.lan -u ci --password-stdin
+          docker build -t git.homelab.lan/ci/app:${{ github.sha }} .
+          docker push git.homelab.lan/ci/app:${{ github.sha }}
+      - run: |
+          curl -sSLo /usr/local/bin/kubectl \
+            https://dl.k8s.io/release/v1.36.3/bin/linux/amd64/kubectl
+          chmod +x /usr/local/bin/kubectl
+          echo "${{ secrets.KUBE_CONFIG }}" > kubeconfig
+          KUBECONFIG=kubeconfig kubectl -n apps set image \
+            deployment/app app=git.homelab.lan/ci/app:${{ github.sha }}
+```
+
+The job image is `node`, which has no `kubectl` — hence the download, pinned to
+the cluster's own minor version. `dl.k8s.io` answers from the runner; several
+other release hosts on this network do not.
+
+`docker build` works because the runner mounts its docker socket into the job —
+which is root on `runner-vm`, and the reason that guest holds nothing else. See
+`forgejo_runner_docker_host` in `group_vars/runners.yml` to turn it off.
+
+Publishing the result to the LAN is one entry in `caddy_k3s_apps` in
+`ansible/inventory/group_vars/forgejo.yml`:
+
+```yaml
+caddy_k3s_apps:
+  - domain: app.homelab.lan
+    node_port: 30080
+    health_uri: /healthz
+```
+
+Caddy terminates TLS for that name and proxies to the NodePort on both k3s
+agents — no in-cluster ingress, because ports 80 and 443 on the hypervisor are
+already DNAT'd to the Forgejo VM and Caddy is the only thing that can answer for
+a LAN name. The `Service` exposing that NodePort belongs in the application's
+repository. Nothing resolves `app.homelab.lan` on its own: add it to
+`/etc/hosts` on the workstation, pointing at the hypervisor.
 
 ## Second storage volume
 
