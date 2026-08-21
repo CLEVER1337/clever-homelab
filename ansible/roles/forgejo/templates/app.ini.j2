@@ -52,8 +52,12 @@ DISABLE_REGISTRATION = {{ forgejo_disable_registration | ternary('true', 'false'
 REQUIRE_SIGNIN_VIEW  = {{ forgejo_require_signin_view | ternary('true', 'false') }}
 
 [actions]
-; CI is on, but no runner is registered yet — that is a separate step.
 ENABLED = true
+; Where `uses: actions/checkout@v4` and friends are cloned from. This is
+; Forgejo's own mirror and also the default — written out because it is the
+; first thing to look at when a workflow fails before it has run a single step,
+; and because docker.io and ghcr.io are not guaranteed reachable from here.
+DEFAULT_ACTIONS_URL = https://data.forgejo.org
 
 [packages]
 ; Built-in OCI registry, so container images can live next to their source.
