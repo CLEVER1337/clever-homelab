@@ -1,0 +1,17 @@
+{# No `{{ ansible_managed }}` header and no comment keys: daemon.json is strict
+   JSON, and dockerd refuses to start on any key it does not recognise — a "//"
+   comment is enough to take the daemon down. The reasoning lives here instead.
+
+   log-opts: Docker's default is one unbounded json file per container, and a
+   chatty build writes hundreds of megabytes of it onto a 10 GB disk.
+
+   live-restore: containers keep running across a daemon restart, so an
+   unattended upgrade of docker-ce does not fail whatever job is in flight. #}
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "{{ docker_log_max_size }}",
+    "max-file": "{{ docker_log_max_files }}"
+  },
+  "live-restore": true
+}

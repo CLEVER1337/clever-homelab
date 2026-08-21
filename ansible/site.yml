@@ -16,6 +16,23 @@
     - forgejo
     - caddy
 
+# After the Forgejo play, and not by convention: the runner registers itself by
+# running Forgejo's own CLI on the git guest through `delegate_to`, so Forgejo
+# has to be installed and its database up before this play starts.
+- name: Configure the Actions runner
+  hosts: runners
+
+  pre_tasks:
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      timeout: 900
+
+  roles:
+    - common
+    - docker
+    - forgejo_runner
+
 # One play per engine rather than one over `databases`: they share nothing but
 # the allow-list, and a failure installing ClickHouse should not stop Postgres
 # from being configured.

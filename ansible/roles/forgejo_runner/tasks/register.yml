@@ -1,0 +1,81 @@
+---
+# Offline registration. The alternative is opening the admin page, copying a
+# one-time token out of it and pasting it into a `register` command — which
+# cannot be automated and has to be repeated every time the guest is rebuilt.
+#
+# Instead both sides are told the same 40-character secret: Forgejo's own CLI
+# creates the runner record from it, and the runner uses it as its token. The
+# command is idempotent — re-running it with the same secret updates the
+# existing runner instead of adding a second one — which is what makes this
+# safe on every `make configure`.
+#
+# Every task here runs on the Forgejo guest. Delegation keeps *this* host's
+# variables, so the paths and the account come from the forgejo_runner_server_*
+# vars in group_vars/runners.yml rather than from Forgejo's own.
+
+# 40 hex characters is what Forgejo requires — `forgejo-cli actions
+# generate-secret` produces exactly this, and openssl saves reaching for the
+# Forgejo binary before it is known to be installed. One-shot, like every other
+# secret in this repository: regenerating it on a live instance would orphan
+# the runner record and leave jobs queued forever.
+- name: Generate the shared registration secret once
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail &&
+      openssl rand -hex 20 | tr -d '\n' > {{ forgejo_runner_secret_path }}
+      && chmod 0640 {{ forgejo_runner_secret_path }}
+      && chown root:{{ forgejo_runner_server_user }} {{ forgejo_runner_secret_path }}
+    creates: "{{ forgejo_runner_secret_path }}"
+    executable: /bin/bash
+  delegate_to: "{{ forgejo_runner_server_host }}"
+
+# --secret-file rather than --secret: the secret never appears in the process
+# list on the git guest, where anything with a shell could read it.
+#
+# --keep-labels because the runner reports its own labels when it connects, and
+# those are the ones that matter. Without it a re-run would clear them out from
+# under a runner that is already working.
+- name: Register the runner with Forgejo
+  ansible.builtin.command:
+    cmd: >-
+      {{ forgejo_runner_server_bin }} forgejo-cli
+      --config {{ forgejo_runner_server_config }}
+      actions register
+      --secret-file {{ forgejo_runner_secret_path }}
+      --name {{ forgejo_runner_name }}
+      --keep-labels
+  delegate_to: "{{ forgejo_runner_server_host }}"
+  become_user: "{{ forgejo_runner_server_user }}"
+  environment:
+    GITEA_WORK_DIR: "{{ forgejo_runner_server_home }}"
+  register: forgejo_runner_registration
+  # Reads and writes one row in Forgejo's database and prints the runner's
+  # UUID. Reporting a change on every run would be noise.
+  changed_when: false
+
+- name: Read the shared secret
+  ansible.builtin.slurp:
+    src: "{{ forgejo_runner_secret_path }}"
+  delegate_to: "{{ forgejo_runner_server_host }}"
+  register: forgejo_runner_secret_raw
+  no_log: true
+
+# The UUID identifies this runner to the instance; it is printed by the command
+# above and is derived from the secret, so it stays the same across re-runs.
+# Before v13 both lived in a `.runner` file the runner wrote for itself — now
+# they are ordinary config, which is why they have to be carried over here.
+- name: Note the runner's identity
+  ansible.builtin.set_fact:
+    forgejo_runner_uuid: "{{ forgejo_runner_registration.stdout | trim }}"
+
+# root-only: systemd reads it as root and passes it to the service through
+# LoadCredential, so the runner account never needs access to the file itself.
+- name: Install the connection token
+  ansible.builtin.copy:
+    dest: "{{ forgejo_runner_config_dir }}/token"
+    content: "{{ forgejo_runner_secret_raw.content | b64decode }}"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart forgejo-runner

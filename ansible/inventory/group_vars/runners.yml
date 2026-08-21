@@ -1,0 +1,111 @@
+---
+# The Forgejo Actions runner. This is the one guest that runs code nobody
+# reviewed — whatever the workflow file in a repository says — which is why it
+# is a machine of its own and why nothing here is shared with the git server.
+
+# --- docker -------------------------------------------------------------------
+# From Docker's own repository rather than Debian's `docker.io`, and not by
+# preference: runner v13 requires Docker 25.0 at minimum, and 28.0.1 in practice
+# — the Docker library it upgraded to trips a moby bug on older daemons that
+# makes every container network fail to parse. Debian ships 20.10. There is no
+# version of this that works from the distribution package.
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  # buildx, because `docker build` in a workflow is the classic-builder path
+  # otherwise, and half the build actions assume buildx is there.
+  - docker-buildx-plugin
+
+docker_apt_uri: https://download.docker.com/linux/debian
+docker_apt_key_url: https://download.docker.com/linux/debian/gpg
+docker_apt_arch: amd64
+
+# Unpinned, unlike forgejo and k3s: unattended-upgrades keeps it current, and a
+# job's containers do not survive a daemon restart anyway. If a future runner
+# release raises the minimum again, note it above rather than pinning here.
+
+# Container logs are the other thing that fills this disk. Docker's default is
+# an unbounded json file per container, and a chatty build can produce hundreds
+# of megabytes in one job.
+docker_log_max_size: 10m
+docker_log_max_files: "3"
+
+# --- image and cache pruning --------------------------------------------------
+# Load-bearing, not hygiene, exactly as on the k3s nodes: this guest has a 10 GB
+# disk and the layer cache is what fills it. An hour before the k3s prune so the
+# two are not fighting over the host's disk at the same minute.
+docker_prune_schedule: "Sun *-*-* 03:00:00"
+# Keep a week of layers — that is the cache doing its job. Anything older has
+# not been used by a build in a week and is not worth the disk.
+docker_prune_until: 168h
+
+# --- forgejo runner -----------------------------------------------------------
+# Pinned for the same reason as forgejo and k3s. v13 is a breaking release: the
+# `.runner` registration file is superseded by `server.connections` in the
+# config (which is what the template below writes), the add-path/set-env/
+# set-output workflow commands are gone, and invalid workflow syntax now fails
+# the job instead of warning. Read the release notes before raising this:
+# https://code.forgejo.org/forgejo/runner/releases
+forgejo_runner_version: "13.0.0"
+forgejo_runner_arch: amd64
+forgejo_runner_bin: /usr/local/bin/forgejo-runner
+
+forgejo_runner_user: runner
+forgejo_runner_home: /var/lib/forgejo-runner
+forgejo_runner_config_dir: /etc/forgejo-runner
+
+# What the runner is called in Forgejo's admin page.
+forgejo_runner_name: "{{ inventory_hostname }}"
+
+# Concurrent jobs. Two against 4 vCPU and 4 GB: a job is usually one container
+# doing something IO-bound, and the memory is the real ceiling — nothing here
+# overcommits. Raising this is the first thing to try if CI feels slow, and the
+# first thing to blame if the guest starts OOM-killing builds.
+forgejo_runner_capacity: 2
+
+# Shorter than Forgejo's own 3h default. A workflow of this homelab's size that
+# has run for an hour is stuck, not slow, and it is holding half the capacity.
+forgejo_runner_job_timeout: 1h
+
+# What `runs-on:` may name, and which image each name means. Images come from
+# data.forgejo.org, Forgejo's own mirror — Docker Hub works from here too, but
+# the mirror is what the shipped actions are tested against and it has no pull
+# rate limit.
+#
+# No `host` backend on purpose: a job with that label runs directly on this VM
+# rather than in a container, and the whole reason this machine exists is that
+# what it runs is untrusted.
+forgejo_runner_labels:
+  - docker:docker://data.forgejo.org/oci/node:22-trixie
+  - ubuntu-latest:docker://data.forgejo.org/oci/node:22-bookworm
+  - debian-trixie:docker://data.forgejo.org/oci/debian:trixie
+
+# --- where the Forgejo instance is --------------------------------------------
+# The runner registers itself by running Forgejo's own CLI on the git guest,
+# through `delegate_to`. Delegation runs the task over there but keeps *this*
+# host's variables, so everything belonging to the forgejo group has to be
+# reached through hostvars explicitly — hence the five lines below rather than
+# using forgejo_bin and friends directly.
+forgejo_runner_server_host: "{{ groups['forgejo'][0] }}"
+forgejo_runner_server_ip: "{{ hostvars[forgejo_runner_server_host].ansible_host }}"
+forgejo_runner_server_bin: "{{ hostvars[forgejo_runner_server_host].forgejo_bin }}"
+forgejo_runner_server_config: "{{ hostvars[forgejo_runner_server_host].forgejo_config_dir }}/app.ini"
+forgejo_runner_server_user: "{{ hostvars[forgejo_runner_server_host].forgejo_user }}"
+forgejo_runner_server_home: "{{ hostvars[forgejo_runner_server_host].forgejo_home }}"
+forgejo_runner_domain: "{{ hostvars[forgejo_runner_server_host].forgejo_domain }}"
+
+forgejo_runner_instance_url: "https://{{ forgejo_runner_domain }}"
+
+# The shared secret both sides register with. Lives on the git guest next to
+# Forgejo's other secrets, generated once and never rotated by a re-run — same
+# rule as every other password in this repository.
+forgejo_runner_secret_path: "{{ hostvars[forgejo_runner_server_host].forgejo_config_dir }}/runner_secret"
+
+# --- trusting the git server's certificate ------------------------------------
+# Caddy signs git.homelab.lan with its own CA (`caddy_tls_mode: internal`), so
+# the runner has to be told about that root or every clone fails on an unknown
+# authority. This is where Caddy keeps it when it runs as the Debian package's
+# systemd unit; if TLS is ever moved to acme this whole step drops out.
+forgejo_runner_ca_src: /var/lib/caddy/.local/share/caddy/pki/authorities/local/root.crt
+forgejo_runner_ca_dest: /usr/local/share/ca-certificates/homelab-caddy.crt

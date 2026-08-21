@@ -1,0 +1,13 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Restarting the daemon kills every container it is running, which on this
+# machine means killing whatever job is in flight. Forgejo marks that job
+# failed and it can be re-run — acceptable, and the alternative is a daemon
+# whose configuration no longer matches its files.
+- name: Restart docker
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted

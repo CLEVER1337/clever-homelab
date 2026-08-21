@@ -1,0 +1,45 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Forgejo Actions runner
+Documentation=https://forgejo.org/docs/latest/admin/actions/
+After=network-online.target docker.service
+Wants=network-online.target
+# Not just After=: without a daemon to create containers in, the runner picks
+# up jobs and fails every one of them.
+Requires=docker.service
+
+[Service]
+Type=simple
+User={{ forgejo_runner_user }}
+Group={{ forgejo_runner_user }}
+SupplementaryGroups=docker
+WorkingDirectory={{ forgejo_runner_home }}
+Environment=HOME={{ forgejo_runner_home }}
+
+# The shared secret, handed over as a systemd credential: it lands in a
+# root-owned tmpfs readable only by this service, and the config points at it
+# through $CREDENTIALS_DIRECTORY. The file itself stays 0600 root:root.
+LoadCredential=token:{{ forgejo_runner_config_dir }}/token
+
+ExecStart={{ forgejo_runner_bin }} daemon --config {{ forgejo_runner_config_dir }}/config.yml
+Restart=always
+RestartSec=10s
+# Long enough for the runner's own 3m shutdown_timeout to let a job finish;
+# the systemd default of 90s would SIGKILL it first.
+TimeoutStopSec=240
+
+# The hardening below is worth less here than it looks, and it is worth saying
+# so: this service talks to the docker socket, and anything that can do that
+# can start a privileged container and own the machine. It stops a mistake, not
+# an attacker. The boundary that actually holds is the VM.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths={{ forgejo_runner_home }}
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+---
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# Restarting cancels whatever job is running — the daemon is given
+# shutdown_timeout to let it finish first, see the config template.
+- name: Restart forgejo-runner
+  ansible.builtin.systemd:
+    name: forgejo-runner
+    state: restarted

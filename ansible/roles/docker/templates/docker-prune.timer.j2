@@ -1,0 +1,14 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Weekly docker prune
+
+[Timer]
+OnCalendar={{ docker_prune_schedule }}
+# The host is a dual-boot workstation and is often off at the scheduled time.
+# Without this the prune would simply never run on a machine that is only up
+# during the day.
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

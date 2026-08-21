@@ -1,0 +1,32 @@
+#!/bin/bash
+# {{ ansible_managed }}
+#
+# Reclaim what CI leaves behind: stopped job containers, the images they pulled,
+# the build cache, and the per-job networks. Docker never does this on its own
+# and this guest has a 10 GB disk.
+#
+# `--filter until={{ docker_prune_until }}` keeps anything touched in the last
+# week, which is the layer cache doing its job. Nothing in use by a running
+# container is ever removed, so this cannot pull the ground out from under a job
+# that happens to be executing while the timer fires.
+set -euo pipefail
+
+before=$(df --output=avail -k / | tail -1)
+
+docker system prune --all --force --filter "until={{ docker_prune_until }}" >/dev/null || {
+  echo "docker prune failed — is the daemon running?" >&2
+  exit 1
+}
+
+after=$(df --output=avail -k / | tail -1)
+freed=$(( (after - before) / 1024 ))
+pct=$(df --output=pcent / | tail -1 | tr -d ' %')
+
+echo "pruned images, containers and build cache, freed ${freed} MB, root now ${pct}% full"
+
+# Loud rather than silent: if the prune ran and the disk is still nearly full,
+# the cache was not the problem and someone needs to look.
+if [ "$pct" -ge {{ disk_guard_percent }} ]; then
+  echo "root is still ${pct}% full after pruning" >&2
+  exit 1
+fi

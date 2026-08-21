@@ -1,0 +1,92 @@
+---
+# The container runtime the Actions runner hands every job to. Nothing else on
+# this homelab uses Docker — k3s has containerd of its own — so this role exists
+# for the runner and is written for it.
+
+- name: Ensure the keyring directory exists
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Install Docker's signing key
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Install the deb822 helper
+  ansible.builtin.apt:
+    name: python3-debian
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Add the Docker repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: "{{ docker_apt_uri }}"
+    # Docker publishes one suite per Debian release, so this follows the guest's
+    # own codename rather than being written out — the cloud image is trixie
+    # today and will be something else after the next rebuild.
+    suites: ["{{ ansible_distribution_release }}"]
+    components: [stable]
+    architectures: ["{{ docker_apt_arch }}"]
+    signed_by: /etc/apt/keyrings/docker.asc
+    state: present
+
+- name: Install Docker
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+    update_cache: true
+
+- name: Create the daemon config directory
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+# Validated rather than trusted: a malformed daemon.json does not fail this
+# task, it fails the *next* daemon start, which usually happens hours later
+# during an unattended upgrade and looks like Docker breaking on its own.
+- name: Configure the daemon
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    validate: dockerd --validate --config-file %s
+  notify: Restart docker
+
+- name: Enable Docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Install the prune script
+  ansible.builtin.template:
+    src: prune.sh.j2
+    dest: /usr/local/sbin/docker-prune
+    mode: "0755"
+    validate: bash -n %s
+
+- name: Install the prune units
+  ansible.builtin.template:
+    src: "docker-prune.{{ item }}.j2"
+    dest: "/etc/systemd/system/docker-prune.{{ item }}"
+    mode: "0644"
+  loop: [service, timer]
+  notify: Reload systemd
+
+- name: Enable the prune timer
+  ansible.builtin.systemd:
+    name: docker-prune.timer
+    enabled: true
+    state: started
+    daemon_reload: true

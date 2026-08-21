@@ -1,0 +1,135 @@
+---
+# Forgejo Actions runner. It polls the git server for jobs and runs each one in
+# a Docker container on this guest — see the `docker` role, which has to have
+# run first.
+
+# A clear failure here beats a confusing one later. This role reaches into the
+# Forgejo guest to mint the shared secret and register itself, so Forgejo has to
+# be installed over there before it runs — which it is not if this play is run
+# with a --limit that excludes the forgejo group on a fresh homelab.
+- name: Check Forgejo is installed on the git guest
+  ansible.builtin.stat:
+    path: "{{ forgejo_runner_server_bin }}"
+  delegate_to: "{{ forgejo_runner_server_host }}"
+  register: forgejo_runner_server_binary
+
+- name: Fail early if the git guest is not configured yet
+  ansible.builtin.assert:
+    that: forgejo_runner_server_binary.stat.exists
+    fail_msg: >-
+      {{ forgejo_runner_server_host }} has no Forgejo installed. The runner
+      registers itself by running Forgejo's own CLI over there, so the forgejo
+      play has to have run at least once — run site.yml without a --limit that
+      excludes it.
+
+- name: Create the runner system user
+  ansible.builtin.user:
+    name: "{{ forgejo_runner_user }}"
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ forgejo_runner_home }}"
+    create_home: true
+    # Membership of `docker` is root on this machine, and there is no way
+    # around it: the runner creates the job containers. That is exactly why the
+    # runner lives on a VM of its own — the boundary that matters here is the
+    # guest, not the user account.
+    groups: docker
+    append: true
+
+- name: Create directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(forgejo_runner_user) }}"
+    group: "{{ item.group | default(forgejo_runner_user) }}"
+    mode: "{{ item.mode | default('0750') }}"
+  loop:
+    - { path: "{{ forgejo_runner_home }}" }
+    # Everything the runner writes on its own: the actions cache, and the
+    # workspace of any job configured to run without a container.
+    - { path: "{{ forgejo_runner_home }}/cache" }
+    - { path: "{{ forgejo_runner_config_dir }}", owner: root, group: root, mode: "0755" }
+
+# The release publishes a checksum next to each binary. Same reasoning as the
+# k3s download: a truncated fetch would otherwise install something that starts
+# and dies without an obvious cause.
+- name: Download the forgejo-runner binary
+  ansible.builtin.get_url:
+    url: >-
+      https://code.forgejo.org/forgejo/runner/releases/download/v{{ forgejo_runner_version }}/forgejo-runner-{{ forgejo_runner_version }}-linux-{{ forgejo_runner_arch }}
+    checksum: >-
+      sha256:https://code.forgejo.org/forgejo/runner/releases/download/v{{ forgejo_runner_version }}/forgejo-runner-{{ forgejo_runner_version }}-linux-{{ forgejo_runner_arch }}.sha256
+    dest: "{{ forgejo_runner_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart forgejo-runner
+
+# The guests have no DNS records: the libvirt network runs dnsmasq but hands out
+# no leases, so there is nothing for it to name. The runner cannot simply dial
+# the address either — the certificate is issued for the name, and every clone
+# URL Forgejo hands a job carries that name too.
+- name: Resolve the git server's name
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '\s{{ forgejo_runner_domain | regex_escape }}$'
+    line: "{{ forgejo_runner_server_ip }} {{ forgejo_runner_domain }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Trust the certificate authority in front of Forgejo
+  ansible.builtin.import_tasks: ca.yml
+  when: hostvars[forgejo_runner_server_host].caddy_tls_mode == 'internal'
+
+- name: Register with the Forgejo instance
+  ansible.builtin.import_tasks: register.yml
+
+- name: Write the runner config
+  ansible.builtin.template:
+    src: config.yml.j2
+    dest: "{{ forgejo_runner_config_dir }}/config.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart forgejo-runner
+
+- name: Install the systemd unit
+  ansible.builtin.template:
+    src: forgejo-runner.service.j2
+    dest: /etc/systemd/system/forgejo-runner.service
+    mode: "0644"
+  notify:
+    - Reload systemd
+    - Restart forgejo-runner
+
+- name: Enable the runner
+  ansible.builtin.systemd:
+    name: forgejo-runner
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Flush handlers so the running daemon matches the files
+  ansible.builtin.meta: flush_handlers
+
+# Weak on purpose, and worth knowing why: the daemon stays `active` even when
+# the instance rejects its credentials — it logs the refusal and keeps
+# retrying. This catches a runner that cannot start at all; a runner that
+# starts and is turned away shows up in the journal and in the admin page.
+- name: Wait for the runner to come up
+  ansible.builtin.command: systemctl is-active forgejo-runner
+  register: forgejo_runner_active
+  until: forgejo_runner_active.stdout == "active"
+  retries: 6
+  delay: 5
+  changed_when: false
+
+- name: Report the runner
+  ansible.builtin.debug:
+    msg:
+      - "forgejo-runner {{ forgejo_runner_version }} registered with {{ forgejo_runner_instance_url }} as {{ forgejo_runner_name }}"
+      - "  uuid {{ forgejo_runner_uuid }}, {{ forgejo_runner_capacity }} concurrent job(s)"
+      - "  runs-on: {{ forgejo_runner_labels | map('regex_replace', ':.*$', '') | join(', ') }}"
+      - "It should be listed under Site Administration -> Actions -> Runners."
+      - "If jobs stay queued: journalctl -u forgejo-runner -f on {{ inventory_hostname }}."

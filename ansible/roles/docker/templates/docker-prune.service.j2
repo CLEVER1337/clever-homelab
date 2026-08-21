@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Reclaim disk from CI containers, images and build cache
+# Pruning without a running daemon is a no-op that reports failure.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/docker-prune

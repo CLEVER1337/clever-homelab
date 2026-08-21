@@ -1,0 +1,83 @@
+# {{ ansible_managed }}
+#
+# `forgejo-runner generate-config` prints the full annotated version of this
+# file — everything not set here keeps the default it documents.
+
+log:
+  # What the journal on this guest gets.
+  level: info
+  # What is shipped to Forgejo and shown in the job log in the web UI.
+  job_level: info
+
+runner:
+  capacity: {{ forgejo_runner_capacity }}
+  timeout: {{ forgejo_runner_job_timeout }}
+  # How long a job gets to finish when the unit is stopped. Kept short and
+  # matched by TimeoutStopSec in the unit: `systemctl restart` during an
+  # Ansible run must not block for hours, and the job it cancels can be re-run
+  # from the web UI.
+  shutdown_timeout: 3m
+  # The instance's certificate is signed by Caddy's local CA, which this guest
+  # has been told to trust — see tasks/ca.yml. Skipping verification instead
+  # would leave the token exposed to anything that can answer for the name.
+  insecure: false
+  fetch_interval: 5s
+  # What `runs-on:` may name. A label with no connection of its own falls back
+  # to these.
+  labels:
+{% for label in forgejo_runner_labels %}
+    - "{{ label }}"
+{% endfor %}
+
+cache:
+  # The actions cache lives on this guest and is never sent to Forgejo. It is
+  # also the second thing after the image layers that fills the disk, so it
+  # sits under the runner's home where the weekly docker prune does not touch
+  # it and `du` finds it in one place.
+  enabled: true
+  dir: {{ forgejo_runner_home }}/cache
+  # Job containers are told to reach the cache proxy here. Detected
+  # automatically when empty, which on a host with a docker bridge and a
+  # libvirt interface picks the wrong one often enough to be worth pinning.
+  host: {{ ansible_host }}
+
+container:
+  # Empty means a fresh network per job, torn down with it. `host` would put
+  # untrusted workflow code straight onto this guest's stack.
+  network: ""
+  # Docker-in-Docker would need this. Nothing here should — a job that can run
+  # privileged containers can leave the container.
+  privileged: false
+  # No docker socket inside the job container: the runner needs it, the code it
+  # runs does not.
+  docker_host: "-"
+  # One line, passed to `docker create`:
+  #
+  #   --add-host      the guests have no DNS, and the job clones from the name
+  #                   in the certificate, not from an address.
+  #   --volume        the host's trust store, so the clone trusts Caddy's CA
+  #                   too. Debian- and Alpine-based images both read this path.
+  #   NODE_EXTRA_CA_CERTS  node ships its own CA list and ignores the system
+  #                   one, and every action written in JavaScript runs on it.
+  options: >-
+    --add-host={{ forgejo_runner_domain }}:{{ forgejo_runner_server_ip }}
+    --volume=/etc/ssl/certs:/etc/ssl/certs:ro
+    --env=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+  # Which host paths a workflow may mount. Everything not listed is refused, so
+  # a workflow cannot ask for the docker socket or for the runner's own token.
+  # The trust store is here because the mount above is checked against this
+  # list as well.
+  valid_volumes:
+    - /etc/ssl/certs
+
+server:
+  # Since v13 the runner is told who it is here rather than writing a `.runner`
+  # file next to itself. The UUID comes from `forgejo-cli actions register` on
+  # the git guest; the token is the secret both sides share.
+  connections:
+    homelab:
+      url: {{ forgejo_runner_instance_url }}
+      uuid: {{ forgejo_runner_uuid }}
+      # Loaded from the systemd credential rather than written inline: this
+      # file is world-readable, the credential is not.
+      token_url: file:$CREDENTIALS_DIRECTORY/token
