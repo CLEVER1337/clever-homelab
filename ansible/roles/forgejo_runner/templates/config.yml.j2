@@ -55,13 +55,21 @@ container:
   # One line, passed to `docker create`:
   #
   #   --add-host      the guests have no DNS, and the job clones from the name
-  #                   in the certificate, not from an address.
+  #                   in the certificate, not from an address. One per name
+  #                   Caddy answers for: the git server, plus every application
+  #                   published from k3s — a deploy workflow that smoke-tests
+  #                   its own service reaches it by hostname like anything
+  #                   else, and without the entry curl reports `000`, which
+  #                   reads like the application is down rather than unfound.
   #   --volume        the host's trust store, so the clone trusts Caddy's CA
   #                   too. Debian- and Alpine-based images both read this path.
   #   NODE_EXTRA_CA_CERTS  node ships its own CA list and ignores the system
   #                   one, and every action written in JavaScript runs on it.
   options: >-
     --add-host={{ git_server_domain }}:{{ git_server_ip }}
+{% for domain in git_server_published_domains %}
+    --add-host={{ domain }}:{{ git_server_ip }}
+{% endfor %}
     --volume=/etc/ssl/certs:/etc/ssl/certs:ro
     --env=NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
   # Which host paths a workflow may mount. Everything not listed is refused —

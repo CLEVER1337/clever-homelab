@@ -38,6 +38,18 @@ git_server_domain: "{{ hostvars[git_server_host].forgejo_domain }}"
 git_server_config_dir: "{{ hostvars[git_server_host].forgejo_config_dir }}"
 git_server_tls_mode: "{{ hostvars[git_server_host].caddy_tls_mode }}"
 
+# Every other name that Caddy on the git guest answers for — the applications
+# published from k3s. Same address as the git server itself, because Caddy is
+# the one process on this homelab that can answer for a name from the LAN.
+#
+# Derived from caddy_k3s_apps rather than listed again, so publishing an
+# application stays a one-line change in group_vars/forgejo.yml. Anything that
+# has to reach a published application by name reads this: without it a CI job
+# gets `000` from curl and no explanation, because there is no DNS out here to
+# fall back on and the failure looks like the application is down.
+git_server_published_domains: >-
+  {{ hostvars[git_server_host].caddy_k3s_apps | default([]) | map(attribute='domain') | list }}
+
 # Where Caddy keeps the root of the CA it signs git.homelab.lan with, when it
 # runs as the Debian package's systemd unit. Only read when caddy_tls_mode is
 # `internal`; switching to acme drops this out entirely.
