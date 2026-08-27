@@ -35,10 +35,27 @@ docker_log_max_files: "3"
 # Load-bearing, not hygiene, exactly as on the k3s nodes: this guest has a 10 GB
 # disk and the layer cache is what fills it. An hour before the k3s prune so the
 # two are not fighting over the host's disk at the same minute.
-docker_prune_schedule: "Sun *-*-* 03:00:00"
-# Keep a week of layers — that is the cache doing its job. Anything older has
-# not been used by a build in a week and is not worth the disk.
-docker_prune_until: 168h
+#
+# Daily, not weekly. The weekly timer was written when every image here was a
+# few hundred megabytes; explAIned-ml builds a 3.7 GB jobs image and leaves ~4.6
+# GB of build cache behind it, so one release fills 83% of this disk on its own.
+# The job that ran next could not even pull its own base image and failed with
+# `No such image`, which reads like a registry problem and is not one.
+docker_prune_schedule: "*-*-* 03:00:00"
+
+# A day, not a week. Every image built here is pushed to the registry before the
+# job ends, so a local copy is a cache and nothing more — and on a 10 GB disk a
+# week of them is a week of images nobody will read again. The age filter is
+# also what made the weekly prune useless in the incident above: everything on
+# the disk had been created that afternoon, so `until=168h` protected all of it.
+docker_prune_until: 24h
+
+# The build cache is capped by size instead, because age is the wrong axis for
+# it: what makes a layer worth keeping is being reused, not being recent, and
+# after one large build the whole cache is recent. `--keep-storage` evicts
+# least-recently-used entries down to this, which keeps the .NET layers that
+# actually get hits without letting one Python build own the disk.
+docker_prune_cache_max: 2GB
 
 # --- forgejo runner -----------------------------------------------------------
 # Pinned for the same reason as forgejo and k3s. v13 is a breaking release: the

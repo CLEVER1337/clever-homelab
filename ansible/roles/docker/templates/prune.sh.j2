@@ -5,13 +5,30 @@
 # the build cache, and the per-job networks. Docker never does this on its own
 # and this guest has a 10 GB disk.
 #
-# `--filter until={{ docker_prune_until }}` keeps anything touched in the last
-# week, which is the layer cache doing its job. Nothing in use by a running
-# container is ever removed, so this cannot pull the ground out from under a job
-# that happens to be executing while the timer fires.
+# Two passes, on two different axes, because one of them does not work alone.
+#
+# The build cache goes first and is capped by *size*: `--max-used-space` evicts
+# least-recently-used entries until the cache fits. Age cannot do this job — a
+# single large build makes the entire cache recent, so an age filter protects
+# exactly the thing that just filled the disk.
+#
+# Not `--keep-storage`: docker 29 deprecated it in favour of these three, and
+# of them `--max-used-space` is the one that states a ceiling. `--reserved-space`
+# is a floor and `--min-free-space` targets the filesystem rather than the cache.
+#
+# The second pass is age-based and covers images, stopped containers and the
+# per-job networks. Images built here are pushed before the job ends, so the
+# local copies are cache; `until` decides how long a cached one is worth its
+# space. Nothing in use by a running container is ever removed, so neither pass
+# can pull the ground out from under a job executing while the timer fires.
 set -euo pipefail
 
 before=$(df --output=avail -k / | tail -1)
+
+docker builder prune --force --max-used-space {{ docker_prune_cache_max }} >/dev/null || {
+  echo "build cache prune failed — is the daemon running?" >&2
+  exit 1
+}
 
 docker system prune --all --force --filter "until={{ docker_prune_until }}" >/dev/null || {
   echo "docker prune failed — is the daemon running?" >&2
