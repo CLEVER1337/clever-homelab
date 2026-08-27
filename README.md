@@ -21,7 +21,7 @@ flowchart TB
             RUNNER["<b>runner-vm</b> · 10.42.0.11<br/>Forgejo Actions runner · Docker<br/>4 / 4G / 10G"]
 
             subgraph K3S["k3s · pods on 10.44.0.0/16"]
-                MASTER["<b>k3s-master</b> · .30<br/>server, SQLite, tainted<br/>2 / 2.5G / 8G"]
+                MASTER["<b>k3s-master</b> · .30<br/>server, SQLite, schedulable<br/>2 / 2.5G / 8G"]
                 W1["<b>k3s-worker-1</b> · .31<br/>2 / 2.5G / 10G"]
                 W2["<b>k3s-worker-2</b> · .32<br/>2 / 2.5G / 10G"]
             end
