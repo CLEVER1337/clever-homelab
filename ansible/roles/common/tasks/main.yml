@@ -44,6 +44,32 @@
   when: common_local_rtc.stdout | trim == "yes"
   changed_when: true
 
+# cloud-init renders /etc/hosts from its own template on *every* boot when
+# manage_etc_hosts is true, which the Debian cloud image ships as the default.
+# Anything written into that file by hand or by Ansible survives exactly until
+# the next reboot.
+#
+# That is not hypothetical either: the `git.homelab.lan` line the forgejo_access
+# role adds is what lets the runner find Forgejo and what lets containerd on the
+# k3s nodes pull images, and a reboot silently removed it from all four guests
+# at once. There is no DNS on the guest network to fall back to — libvirt's
+# dnsmasq hands out no leases, so /etc/hosts is the only name resolution these
+# machines have, which is precisely why it must not be volatile.
+#
+# A drop-in rather than an edit to /etc/cloud/cloud.cfg: the package owns that
+# file and an upgrade may replace it.
+- name: Stop cloud-init from rewriting /etc/hosts
+  ansible.builtin.copy:
+    dest: /etc/cloud/cloud.cfg.d/99-homelab-hosts.cfg
+    content: |
+      # {{ ansible_managed }}
+      # /etc/hosts is the only name resolution on the guest network. Ansible
+      # owns its contents; cloud-init must not regenerate it at boot.
+      manage_etc_hosts: false
+    owner: root
+    group: root
+    mode: "0644"
+
 - name: Install unattended-upgrades
   ansible.builtin.apt:
     name: unattended-upgrades
