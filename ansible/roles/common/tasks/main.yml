@@ -44,6 +44,30 @@
   when: common_local_rtc.stdout | trim == "yes"
   changed_when: true
 
+# The task above fixes what the clock reads; this fixes who is allowed to run
+# before it is right. They are different problems and the second one bit us.
+#
+# `After=time-sync.target` is inert on a stock Debian guest: nothing pulls that
+# target in, so it is reached immediately and ordering against it means nothing.
+# systemd-time-wait-sync is the unit that gives it meaning — it holds the target
+# until timesyncd reports an actual synchronisation, so a service ordered after
+# it starts with a trustworthy clock or does not start yet.
+#
+# Concretely: Caddy came up on the Forgejo guest six hours ahead after a reboot
+# and minted an intermediate CA and three leaf certificates stamped notBefore in
+# the future — one of them with a notAfter *earlier* than its notBefore. Nothing
+# would talk to Forgejo over TLS afterwards, including the CI runner, whose only
+# symptom was Forgejo reporting no runner with the `docker` label.
+#
+# Costs up to ~2 minutes of boot on a guest that cannot reach an NTP server.
+# These reach one through the host's NAT, and a slow boot beats certificates
+# that have to be deleted by hand.
+- name: Hold boot until the clock is synchronised
+  ansible.builtin.systemd:
+    name: systemd-time-wait-sync
+    enabled: true
+    state: started
+
 # cloud-init renders /etc/hosts from its own template on *every* boot when
 # manage_etc_hosts is true, which the Debian cloud image ships as the default.
 # Anything written into that file by hand or by Ansible survives exactly until

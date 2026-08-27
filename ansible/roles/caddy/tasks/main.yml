@@ -60,6 +60,42 @@
     validate: caddy validate --adapter caddyfile --config %s
   notify: Reload caddy
 
+# Caddy provisions TLS seconds after it starts, and with `tls internal` it is
+# its own CA — so whatever the clock says at that moment is baked into a
+# certificate's notBefore. Start it before timesyncd has corrected a skewed RTC
+# and the result is a certificate valid only in the future, which every client
+# refuses and which Caddy will not reissue on its own: the files look present
+# and current to it.
+#
+# The common role enables systemd-time-wait-sync, which is what makes ordering
+# against this target mean anything. Both halves are required — this drop-in
+# alone would be inert.
+- name: Ensure the Caddy drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/caddy.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Start Caddy only once the clock is trustworthy
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/caddy.service.d/10-wait-for-clock.conf
+    content: |
+      # {{ ansible_managed }}
+      [Unit]
+      After=time-sync.target
+      Wants=time-sync.target
+    owner: root
+    group: root
+    mode: "0644"
+  register: caddy_clock_dropin
+
+- name: Reload systemd for the drop-in
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: caddy_clock_dropin is changed
+
 - name: Enable Caddy
   ansible.builtin.systemd:
     name: caddy
