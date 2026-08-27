@@ -38,6 +38,35 @@ k3s_cluster_dns: 10.45.0.10
 k3s_disable:
   - traefik
 
+# --- scheduling on the server -------------------------------------------------
+# k3s taints its server CriticalAddonsOnly=true:NoExecute by default, and this
+# repository used to keep that: 2.5 GB runs the API server, the scheduler and
+# the SQLite datastore, and a workload that OOM-kills the API server leaves
+# every agent up while the cluster silently stops accepting changes.
+#
+# The taint is off because the arithmetic stopped working. Two agents at 2.5 GB
+# give ~4.8 GiB of allocatable memory, and explAIned's requests come to ~4.87
+# GiB — so both agents sat at 97-99% and *nothing* else could be placed. The
+# `kafka-create-topics` Job spent five days Pending, which meant the cluster ran
+# for five days with no Kafka topics at all. A third of the cluster's memory was
+# idle behind the taint while that happened.
+#
+# The failure the comment warned about is real, so it is now prevented by
+# reservation rather than by exclusion: the kubelet holds the memory below back
+# for the system, allocatable on this node shrinks by that much, and the
+# scheduler cannot commit the API server's headroom to a pod. That is the
+# guarantee the taint was standing in for.
+#
+# Set this back to false if the server ever moves to a machine small enough that
+# the reservation eats the whole node.
+k3s_server_schedulable: true
+
+# Held back from allocatable on the server. Covers the API server, the
+# scheduler, the controller manager and SQLite with room to breathe — roughly a
+# third of a 2.5 GB guest. Raise it in step with anything that makes the control
+# plane heavier (embedded etcd instead of SQLite, a second server).
+k3s_server_reserved_memory: 768Mi
+
 # --- image pruning ------------------------------------------------------------
 # Load-bearing, not hygiene: the agents have 10 GB disks. containerd never
 # reclaims an image on its own, so without this the ceiling arrives in weeks.

@@ -24,11 +24,27 @@ disable:
 {% endif %}
 
 # 2.5 GB of RAM runs the API server, the scheduler and the SQLite datastore and
-# nothing else. Without this taint a workload can land here, and when the API
-# server is what gets OOM-killed every agent stays up while the cluster stops
-# accepting changes — the confusing failure, not the obvious one.
+# nothing else. A workload that OOM-kills the API server leaves every agent up
+# while the cluster stops accepting changes — the confusing failure, not the
+# obvious one.
+#
+# Two ways to prevent that. The taint excludes every workload from the node;
+# the reservation below tells the kubelet to keep that memory out of
+# `allocatable`, so the scheduler can place pods here but can never commit the
+# control plane's headroom to one. The reservation is the default because the
+# taint left a third of the cluster's memory idle on a cluster that had none to
+# spare — see group_vars/k3s.yml for what that cost.
+{% if k3s_server_schedulable %}
+# node-taint omitted: k3s_server_schedulable is true.
+{% else %}
 node-taint:
   - "CriticalAddonsOnly=true:NoExecute"
+{% endif %}
+
+# Applies whichever way the switch above is set: harmless when nothing can be
+# scheduled here anyway, load-bearing when something can.
+kubelet-arg:
+  - "system-reserved=memory={{ k3s_server_reserved_memory }}"
 
 # Addresses the API server's certificate must be valid for. 127.0.0.1 covers
 # on-node kubectl; the guest address covers the agents and anything reaching in
